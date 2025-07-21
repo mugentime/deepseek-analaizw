@@ -63,13 +63,21 @@
         .help { background: var(--bg-dark); border: 1px solid var(--border); padding: 15px; border-radius: 6px; margin: 10px 0; font-size: 0.9em; }
         .help h5 { color: var(--primary); margin-bottom: 8px; }
         .help code { background: var(--bg-card); padding: 2px 6px; border-radius: 3px; }
+        
+        .earn-position { background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 8px 0; }
+        .earn-position h5 { color: #58a6ff; margin-bottom: 5px; }
+        .earn-position .position-details { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 0.85em; }
+        .earn-position .position-details span { color: var(--text-muted); }
+        .earn-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.7em; font-weight: 500; margin-right: 8px; }
+        .earn-badge.flexible { background: rgba(36, 76, 72, 0.2); color: var(--primary); }
+        .earn-badge.locked { background: rgba(150, 44, 47, 0.2); color: var(--danger); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>⚡ Efficient Trading Platform <span class="badge">LIVE</span></h1>
-            <p>Streamlined for maximum performance - Wallet + Webhooks</p>
+            <p>Streamlined for maximum performance - Wallet + Webhooks + Earn</p>
         </div>
 
         <div class="nav-tabs">
@@ -84,7 +92,7 @@
                 <h3>🔐 API Connection</h3>
                 <p id="status">Checking...</p>
                 <div class="alert alert-danger">⚠️ LIVE TRADING MODE - Real money!</div>
-                <div class="alert alert-success">✅ Real prices + Close signals fixed</div>
+                <div class="alert alert-success">✅ Real prices + Close signals + Earn functionality</div>
                 <button class="btn" onclick="connect()">Connect Binance API</button>
                 <button class="btn" onclick="refresh()">🔄 Refresh</button>
             </div>
@@ -347,13 +355,57 @@
             if (data.error) {
                 $('earnPositions').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
                 $('earnSummary').style.display = 'none';
+                status('Earn API error: ' + data.error);
                 return;
             }
 
-            // Show placeholder message for now
-            $('earnPositions').innerHTML = '<p>💎 Earn functionality not implemented yet</p>';
-            $('earnSummary').style.display = 'none';
-            status('Earn endpoint connected (placeholder)');
+            if (data.success && data.summary) {
+                const summary = data.summary;
+                const positions = data.earn_positions || [];
+                
+                // Update summary metrics
+                $('earnBalance').textContent = `$${summary.total_earn_balance.toFixed(2)}`;
+                $('dailyRewards').textContent = `$${summary.daily_rewards.toFixed(4)}`;
+                $('flexibleCount').textContent = summary.flexible_count;
+                $('lockedCount').textContent = summary.locked_count;
+                
+                // Show summary if we have positions
+                if (summary.total_positions > 0) {
+                    $('earnSummary').style.display = 'grid';
+                    
+                    // Display individual positions
+                    if (positions.length > 0) {
+                        $('earnPositions').innerHTML = positions.map(pos => `
+                            <div class="earn-position">
+                                <h5>
+                                    <span class="earn-badge ${pos.type}">${pos.type.toUpperCase()}</span>
+                                    ${pos.asset}
+                                </h5>
+                                <div class="position-details">
+                                    <span>Amount: <strong>${pos.amount.toFixed(4)}</strong></span>
+                                    <span>APY: <strong>${pos.apy.toFixed(2)}%</strong></span>
+                                    <span>Daily: <strong>$${pos.daily_rewards.toFixed(4)}</strong></span>
+                                    ${pos.type === 'locked' ? `<span>Duration: <strong>${pos.duration} days</strong></span>` : ''}
+                                    ${pos.type === 'flexible' && pos.can_redeem !== undefined ? `<span>Redeemable: <strong>${pos.can_redeem ? 'Yes' : 'No'}</strong></span>` : ''}
+                                    ${pos.yesterday_rewards !== undefined ? `<span>Yesterday: <strong>$${pos.yesterday_rewards.toFixed(4)}</strong></span>` : ''}
+                                </div>
+                            </div>
+                        `).join('');
+                    } else {
+                        $('earnPositions').innerHTML = '<p>💎 Earn positions summary loaded, but no detailed positions available</p>';
+                    }
+                    
+                    status(`Earn loaded: $${summary.total_earn_balance.toFixed(2)} in ${summary.total_positions} positions`);
+                } else {
+                    $('earnPositions').innerHTML = '<p>💎 No earn positions found</p>';
+                    $('earnSummary').style.display = 'none';
+                    status('No earn positions found');
+                }
+            } else {
+                $('earnPositions').innerHTML = '<p>💎 Unable to load earn positions</p>';
+                $('earnSummary').style.display = 'none';
+                status('Earn data unavailable');
+            }
         }
 
         async function refreshTracked() {
@@ -457,7 +509,7 @@
             refresh();
             loadStrategies();
             refreshWebhooks();
-            status('Efficient Trading Platform loaded');
+            status('Efficient Trading Platform loaded with Earn functionality');
             
             // Optimized auto-refresh with debouncing (reduces API calls)
             setInterval(debouncedRefresh, 30000);
