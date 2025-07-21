@@ -1,1276 +1,539 @@
-#!/usr/bin/env python3
-
-"""
-SIMPLIFIED Trading Platform - Focus on Wallet Management and Webhooks
-Removed performance tracking and Pine Script creation - back to basics
-"""
-
-import os
-import json
-import logging
-import sqlite3
-import hmac
-import hashlib
-import time
-import requests
-from datetime import datetime, timedelta
-from urllib.parse import urlencode
-from flask import Flask, jsonify, request, render_template
-from flask_cors import CORS
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-# Create Flask app
-app = Flask(__name__)
-CORS(app)
-
-# Configuration
-app.config['JSON_SORT_KEYS'] = False
-app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
-
-# Global variables
-api_clients = {}
-webhook_count = 0
-open_positions = {}  # Track open positions for close signals
-
-# Binance symbol precision mapping - ALL PAIRS SUPPORTED
-SYMBOL_PRECISION = {
-    "BTCUSDT": {"quantity": 3, "price": 2},
-    "ETHUSDT": {"quantity": 3, "price": 2},
-    "SOLUSDT": {"quantity": 2, "price": 3},
-    "AVAXUSDT": {"quantity": 1, "price": 3},
-    "ADAUSDT": {"quantity": 0, "price": 5},
-    "DOTUSDT": {"quantity": 1, "price": 3},
-    "LINKUSDT": {"quantity": 2, "price": 3},
-    "MATICUSDT": {"quantity": 0, "price": 5},
-    "LTCUSDT": {"quantity": 3, "price": 2},
-    "BCHUSDT": {"quantity": 3, "price": 2},
-    "XRPUSDT": {"quantity": 0, "price": 4},
-    "XRPUSDC": {"quantity": 0, "price": 4}
-}
-
-def get_symbol_precision(symbol: str) -> dict:
-    """Get precision settings for a symbol"""
-    return SYMBOL_PRECISION.get(symbol, {"quantity": 3, "price": 2})
-
-def format_quantity_for_binance(quantity: str, symbol: str) -> str:
-    """Format quantity according to Binance symbol precision"""
-    try:
-        precision = get_symbol_precision(symbol)
-        qty_decimal_places = precision["quantity"]
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Efficient Trading Platform</title>
+    <style>
+        :root {
+            --primary: #244c48; --secondary: #183431; --accent: #9c4d30;
+            --danger: #962c2f; --bg-dark: #0d1117; --bg-card: #21262d;
+            --border: #30363d; --text: #f0f6fc; --text-muted: #8b949e;
+        }
         
-        qty_float = float(quantity)
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-dark); color: var(--text); padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: #161b22; border-radius: 12px; padding: 30px; border: 1px solid var(--border); }
         
-        # Apply minimum quantity rules
-        if symbol in ["XRPUSDC", "XRPUSDT"]:
-            if qty_float < 1:
-                qty_float = 1
-        elif symbol in ["ADAUSDT", "MATICUSDT"]:
-            if qty_float < 1:
-                qty_float = 1
-        elif symbol in ["BTCUSDT", "ETHUSDT"]:
-            if qty_float < 0.001:
-                qty_float = 0.001
+        .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid var(--border); }
+        .header h1 { font-size: 2.2em; margin-bottom: 8px; }
+        .badge { background: linear-gradient(45deg, var(--danger), var(--accent)); color: white; padding: 6px 15px; border-radius: 15px; font-size: 0.9em; margin-left: 10px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
         
-        formatted_qty = f"{qty_float:.{qty_decimal_places}f}"
+        .status-panel { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; padding: 20px; border-radius: 10px; margin-bottom: 30px; }
+        .btn { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s; margin: 5px; }
+        .btn:hover { background: var(--secondary); transform: translateY(-1px); }
+        .btn.danger { background: var(--danger); }
+        .btn.info { background: var(--secondary); }
         
-        if qty_decimal_places == 0:
-            formatted_qty = str(int(qty_float))
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+        .card h3 { margin-bottom: 15px; }
         
-        logger.info(f"📊 Formatted quantity: {quantity} -> {formatted_qty} for {symbol}")
-        return formatted_qty
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-dark); color: var(--text); }
+        .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(36, 76, 72, 0.3); }
         
-    except Exception as e:
-        logger.error(f"❌ Error formatting quantity: {e}")
-        return quantity
+        .alert { padding: 12px; border-radius: 6px; margin: 10px 0; }
+        .alert-success { background: rgba(36, 76, 72, 0.1); border: 1px solid var(--primary); color: #3fb950; }
+        .alert-danger { background: rgba(150, 44, 47, 0.1); border: 1px solid var(--danger); color: var(--danger); }
+        .alert-info { background: rgba(24, 52, 49, 0.1); border: 1px solid var(--secondary); color: #58a6ff; }
+        
+        .metric { text-align: center; padding: 15px; background: var(--bg-dark); border-radius: 8px; border: 1px solid var(--border); }
+        .metric-value { font-size: 1.8em; font-weight: bold; color: #58a6ff; margin-bottom: 5px; }
+        .metric-label { font-size: 0.9em; color: var(--text-muted); }
+        .positive { color: var(--primary); }
+        .negative { color: var(--danger); }
+        
+        .nav-tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+        .nav-tab { padding: 12px 20px; cursor: pointer; border: none; background: none; font-size: 14px; color: var(--text-muted); border-bottom: 3px solid transparent; font-weight: 500; }
+        .nav-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .nav-tab:hover { color: var(--text); }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .item { background: var(--bg-dark); padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid var(--border); }
+        .feed { max-height: 300px; overflow-y: auto; background: var(--bg-dark); padding: 10px; border-radius: 6px; border: 1px solid var(--border); }
+        .feed-item { background: var(--bg-card); padding: 8px; margin: 5px 0; border-radius: 4px; border-left: 3px solid var(--primary); }
+        
+        .status-bar { position: fixed; bottom: 20px; right: 20px; background: #142924; color: white; padding: 10px 15px; border-radius: 6px; font-size: 14px; max-width: 400px; z-index: 1000; }
+        .help { background: var(--bg-dark); border: 1px solid var(--border); padding: 15px; border-radius: 6px; margin: 10px 0; font-size: 0.9em; }
+        .help h5 { color: var(--primary); margin-bottom: 8px; }
+        .help code { background: var(--bg-card); padding: 2px 6px; border-radius: 3px; }
+        
+        .earn-position { background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 8px 0; }
+        .earn-position h5 { color: #58a6ff; margin-bottom: 5px; }
+        .earn-position .position-details { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 0.85em; }
+        .earn-position .position-details span { color: var(--text-muted); }
+        .earn-badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.7em; font-weight: 500; margin-right: 8px; }
+        .earn-badge.flexible { background: rgba(36, 76, 72, 0.2); color: var(--primary); }
+        .earn-badge.locked { background: rgba(150, 44, 47, 0.2); color: var(--danger); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ Efficient Trading Platform <span class="badge">LIVE</span></h1>
+            <p>Streamlined for maximum performance - Wallet + Webhooks + Earn</p>
+        </div>
 
-def get_current_market_price(symbol: str) -> float:
-    """Get current market price from Binance"""
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
-        
-        logger.info(f"🔍 Fetching current market price for {symbol}")
-        
-        response = requests.get(url, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            price = float(data['price'])
-            logger.info(f"✅ Current {symbol} price: ${price}")
-            return price
-        else:
-            logger.error(f"❌ Failed to get price for {symbol}: HTTP {response.status_code}")
-            return get_fallback_price(symbol)
-            
-    except Exception as e:
-        logger.error(f"❌ Error getting market price for {symbol}: {e}")
-        return get_fallback_price(symbol)
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('wallet')">💼 Wallet</button>
+            <button class="nav-tab" onclick="switchTab('strategies')">🎯 Strategies</button>
+            <button class="nav-tab" onclick="switchTab('webhooks')">🔌 Webhooks</button>
+        </div>
 
-def get_fallback_price(symbol: str) -> float:
-    """Fallback prices when Binance API is unavailable - ALL PAIRS SUPPORTED"""
-    fallback_prices = {
-        'BTCUSDT': 45000.0,
-        'ETHUSDT': 2400.0,
-        'SOLUSDT': 22.45,
-        'AVAXUSDT': 18.92,
-        'ADAUSDT': 0.4567,
-        'DOTUSDT': 6.789,
-        'LINKUSDT': 12.34,
-        'MATICUSDT': 0.8901,
-        'LTCUSDT': 85.67,
-        'BCHUSDT': 220.50,
-        'XRPUSDT': 0.6234,
-        'XRPUSDC': 0.6234
-    }
-    price = fallback_prices.get(symbol, 1.0)
-    logger.warning(f"⚠️ Using fallback price for {symbol}: ${price}")
-    return price
+        <!-- Wallet Tab -->
+        <div id="wallet" class="tab-content active">
+            <div class="status-panel">
+                <h3>🔐 API Connection</h3>
+                <p id="status">Checking...</p>
+                <div class="alert alert-danger">⚠️ LIVE TRADING MODE - Real money!</div>
+                <div class="alert alert-success">✅ Real prices + Close signals + Earn functionality</div>
+                <button class="btn" onclick="connect()">Connect Binance API</button>
+                <button class="btn" onclick="refresh()">🔄 Refresh</button>
+            </div>
 
-class BinanceFuturesAPI:
-    """Live Binance Futures API Client"""
-    
-    def __init__(self, api_key: str, api_secret: str):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.base_url = "https://fapi.binance.com"
-        self.spot_url = "https://api.binance.com"  # For earn endpoints
-        self.session = requests.Session()
-        self.session.headers.update({"X-MBX-APIKEY": self.api_key})
-    
-    def generate_signature(self, params: dict) -> str:
-        """Generate HMAC SHA256 signature"""
-        query_string = urlencode(params)
-        return hmac.new(
-            self.api_secret.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-    
-    def test_connection(self) -> bool:
-        """Test API connection"""
-        try:
-            url = f"{self.base_url}/fapi/v1/ping"
-            response = self.session.get(url, timeout=10)
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Connection test failed: {e}")
-            return False
-    
-    def get_current_price(self, symbol: str) -> float:
-        """Get current market price for a symbol"""
-        try:
-            url = f"{self.base_url}/fapi/v1/ticker/price"
-            params = {"symbol": symbol}
-            
-            response = self.session.get(url, params=params, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                return float(data['price'])
-            else:
-                logger.error(f"Failed to get price: HTTP {response.status_code}")
-                return get_fallback_price(symbol)
-                
-        except Exception as e:
-            logger.error(f"Error getting current price: {e}")
-            return get_fallback_price(symbol)
-    
-    def get_account_info(self) -> dict:
-        """Get account information"""
-        try:
-            url = f"{self.base_url}/fapi/v2/account"
-            timestamp = int(time.time() * 1000)
-            params = {"timestamp": timestamp}
-            params["signature"] = self.generate_signature(params)
-            
-            response = self.session.get(url, params=params, timeout=10)
-            return response.json() if response.status_code == 200 else {"error": f"HTTP {response.status_code}"}
-        except Exception as e:
-            logger.error(f"Error getting account info: {e}")
-            return {"error": str(e)}
-    
-    def get_balance(self) -> dict:
-        """Get account balance"""
-        try:
-            account_info = self.get_account_info()
-            if "error" in account_info:
-                return account_info
-            
-            return {
-                "account_summary": {
-                    "total_wallet_balance": float(account_info.get("totalWalletBalance", 0)),
-                    "available_balance": float(account_info.get("availableBalance", 0)),
-                    "total_unrealized_pnl": float(account_info.get("totalUnrealizedProfit", 0)),
-                    "can_trade": account_info.get("canTrade", False)
-                }
+            <div class="grid">
+                <div class="card">
+                    <h3>📊 Overview</h3>
+                    <div class="grid-4">
+                        <div class="metric"><div class="metric-value" id="strategies">0</div><div class="metric-label">Strategies</div></div>
+                        <div class="metric"><div class="metric-value" id="webhooks">0</div><div class="metric-label">Webhooks</div></div>
+                        <div class="metric"><div class="metric-value" id="signals">0</div><div class="metric-label">Signals</div></div>
+                        <div class="metric"><div class="metric-value" id="tracked">0</div><div class="metric-label">Tracked</div></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>💰 Balance</h3>
+                    <div id="balance">Connect to API to view balance</div>
+                    <button class="btn" onclick="refreshBalance()">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📍 Positions</h3>
+                <div id="positions">Connect to API to view positions</div>
+                <button class="btn" onclick="refreshPositions()">🔄 Refresh</button>
+            </div>
+
+            <div class="card">
+                <h3>💎 Earn Positions</h3>
+                <div id="earnPositions">Connect to API to view earn positions</div>
+                <div class="grid-4" id="earnSummary" style="margin-top: 15px; display: none;">
+                    <div class="metric"><div class="metric-value" id="earnBalance">$0</div><div class="metric-label">Total Earn</div></div>
+                    <div class="metric"><div class="metric-value" id="dailyRewards">$0</div><div class="metric-label">Daily Rewards</div></div>
+                    <div class="metric"><div class="metric-value" id="flexibleCount">0</div><div class="metric-label">Flexible</div></div>
+                    <div class="metric"><div class="metric-value" id="lockedCount">0</div><div class="metric-label">Locked</div></div>
+                </div>
+                <button class="btn" onclick="refreshEarn()">💎 Refresh Earn</button>
+            </div>
+
+            <div class="card">
+                <h3>📍 Tracked Positions</h3>
+                <div id="trackedPositions">No tracked positions</div>
+                <button class="btn" onclick="refreshTracked()">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <!-- Strategies Tab -->
+        <div id="strategies" class="tab-content">
+            <div class="grid">
+                <div class="card">
+                    <h3>🎯 Create Strategy</h3>
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input id="strategyName" placeholder="My Strategy">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input id="strategyDesc" placeholder="Strategy description">
+                    </div>
+                    <div class="help">
+                        <h5>💡 Webhook Format</h5>
+                        <p>Use in TradingView alerts:</p>
+                        <p><code>buy BTCUSDT 0.01</code> - Opens Bitcoin long</p>
+                        <p><code>close BTCUSDT</code> - Closes Bitcoin position</p>
+                    </div>
+                    <button class="btn" onclick="createStrategy()" style="width: 100%;">Create Strategy</button>
+                </div>
+
+                <div class="card">
+                    <h3>📋 My Strategies</h3>
+                    <button class="btn" onclick="loadStrategies()" style="float: right;">🔄</button>
+                    <div id="strategiesList">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Webhooks Tab -->
+        <div id="webhooks" class="tab-content">
+            <div class="card">
+                <h3>🔌 Webhook Activity</h3>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <span class="badge">🟢 MONITORING</span>
+                    <button class="btn" onclick="refreshWebhooks()">🔄 Refresh</button>
+                </div>
+
+                <div class="alert alert-success">
+                    <h5>✅ Close Signals Working!</h5>
+                    <p>Send <code>close SYMBOL</code> to close tracked positions</p>
+                </div>
+
+                <div class="grid">
+                    <div class="card">
+                        <h4>📊 Stats</h4>
+                        <div class="grid-4">
+                            <div class="metric"><div class="metric-value" id="totalWebhooks">0</div><div class="metric-label">Total</div></div>
+                            <div class="metric"><div class="metric-value" id="successTrades">0</div><div class="metric-label">Success</div></div>
+                            <div class="metric"><div class="metric-value" id="failedWebhooks">0</div><div class="metric-label">Failed</div></div>
+                            <div class="metric"><div class="metric-value" id="lastWebhook">Never</div><div class="metric-label">Last</div></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h4>⚡ Live Feed</h4>
+                        <div id="liveFeed" class="feed">Waiting for signals...</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h4>📋 Recent Activity</h4>
+                    <div id="activityList">No activity yet</div>
+                </div>
+
+                <div class="card">
+                    <h4>🧪 Test Parsing</h4>
+                    <div class="form-group">
+                        <input id="testMessage" placeholder="buy BTCUSDT 0.01" style="font-family: monospace;">
+                    </div>
+                    <button class="btn" onclick="testParsing()">🔍 Test</button>
+                    <div class="help">
+                        <h5>Examples (ALL PAIRS):</h5>
+                        <p><code>buy BTCUSDT 0.01</code> - Bitcoin long</p>
+                        <p><code>sell ETHUSDT 0.1</code> - Ethereum short</p>
+                        <p><code>buy SOLUSDT 2</code> - Solana long</p>
+                    </div>
+                    <div id="parseResult"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar" id="statusBar">Efficient Trading Platform - Ready</div>
+
+    <script>
+        // Global state for active client ID
+        let activeClientId = null;
+        let isConnected = false;
+        let strategies = [];
+        let webhookData = [];
+        let refreshTimeout = null;
+
+        // Optimized utilities
+        const $ = id => document.getElementById(id);
+        const show = id => $(id).classList.add('active');
+        const hide = id => $(id).classList.remove('active');
+        const status = msg => $('statusBar').textContent = `${new Date().toLocaleTimeString()}: ${msg}`;
+        
+        // Generic helper to call the backend
+        const api = async (url, options = {}) => {
+            try {
+                const response = await fetch(url, { 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    ...options 
+                });
+                return await response.json();
+            } catch (e) {
+                return { error: e.message };
             }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def get_positions(self) -> list:
-        """Get current positions"""
-        try:
-            account_info = self.get_account_info()
-            if "error" in account_info:
-                return [account_info]
-            
-            positions = []
-            for pos in account_info.get("positions", []):
-                position_amt = float(pos.get("positionAmt", 0))
-                if position_amt != 0:
-                    positions.append({
-                        "symbol": pos.get("symbol", ""),
-                        "position_side": "LONG" if position_amt > 0 else "SHORT",
-                        "position_amount": position_amt,
-                        "entry_price": float(pos.get("entryPrice", 0)),
-                        "unrealized_pnl": float(pos.get("unrealizedProfit", 0))
-                    })
-            return positions
-        except Exception as e:
-            return [{"error": str(e)}]
-    
-    def place_order(self, symbol: str, side: str, quantity: float, order_type: str = "MARKET") -> dict:
-        """Place an order"""
-        try:
-            formatted_quantity = format_quantity_for_binance(str(quantity), symbol)
-            
-            url = f"{self.base_url}/fapi/v1/order"
-            timestamp = int(time.time() * 1000)
-            
-            params = {
-                "symbol": symbol,
-                "side": side.upper(),
-                "type": order_type.upper(),
-                "quantity": formatted_quantity,
-                "timestamp": timestamp
-            }
-            params["signature"] = self.generate_signature(params)
-            
-            logger.info(f"📡 Placing order: {params}")
-            
-            pre_order_price = self.get_current_price(symbol)
-            logger.info(f"📊 Pre-order {symbol} price: ${pre_order_price}")
-            
-            response = self.session.post(url, params=params, timeout=10)
-            data = response.json()
-            
-            if response.status_code == 200:
-                actual_price = float(data.get("avgPrice", data.get("price", pre_order_price)))
-                if actual_price == 0:
-                    actual_price = pre_order_price
-                
-                logger.info(f"✅ Order executed at: ${actual_price}")
-                
-                return {
-                    "success": True,
-                    "order_id": data.get("orderId"),
-                    "status": data.get("status", "FILLED"),
-                    "execution_price": actual_price,
-                    "formatted_quantity": formatted_quantity,
-                    "message": f"Order placed successfully: {side} {formatted_quantity} {symbol} @ ${actual_price}",
-                    "pre_order_price": pre_order_price
+        };
+
+        // Optimized DOM updates with batch operations
+        const updateMetrics = (data) => {
+            const updates = [
+                ['strategies', data.strategies || 0],
+                ['webhooks', data.webhook_count || 0], 
+                ['tracked', data.tracked_positions || 0]
+            ];
+            updates.forEach(([id, value]) => $(id).textContent = value);
+        };
+
+        // Debounced refresh to prevent excessive API calls
+        const debouncedRefresh = () => {
+            if (refreshTimeout) clearTimeout(refreshTimeout);
+            refreshTimeout = setTimeout(() => {
+                if (isConnected && activeClientId) {
+                    Promise.all([refreshBalance(), refreshPositions(), refreshEarn()]);
                 }
-            else:
-                error_code = data.get('code', 'Unknown')
-                error_msg = data.get('msg', 'Unknown error')
+                Promise.all([refreshWebhooks(), refreshTracked()]);
+            }, 1000);
+        };
+
+        // Tab switching - optimized
+        function switchTab(tab) {
+            const contents = document.querySelectorAll('.tab-content');
+            const tabs = document.querySelectorAll('.nav-tab');
+            
+            contents.forEach(t => t.classList.remove('active'));
+            tabs.forEach(t => t.classList.remove('active'));
+            
+            show(tab);
+            event.target.classList.add('active');
+            
+            if (tab === 'webhooks') refreshWebhooks();
+            else if (tab === 'wallet') refreshTracked();
+        }
+
+        // Connect to Binance – sets activeClientId
+        async function connect() {
+            status('Connecting...');
+            const data = await api('/api/connect', { method: 'POST' });
+            if (data.success) {
+                activeClientId = data.client_id; // Store client ID globally
+                isConnected = true;
+                $('status').innerHTML = '<strong style="color: #3fb950;">✅ Connected (LIVE)</strong>';
+                refreshBalance();
+                refreshPositions(); 
+                refreshEarn();
+                status('Connected to Binance LIVE API');
+            } else {
+                status('Connection failed: ' + (data.error || 'Unknown error'));
+            }
+        }
+
+        // API functions that use activeClientId
+        async function refresh() {
+            const data = await api('/health');
+            $('status').innerHTML = `Status: ${data.status} | API: ${data.api_configured ? '✅' : '❌'} | Tracked: ${data.tracked_positions}`;
+            $('webhooks').textContent = data.webhook_count;
+            $('tracked').textContent = data.tracked_positions;
+            status('Health check completed');
+        }
+
+        async function refreshBalance() {
+            if (!activeClientId) return;
+            const data = await api(`/api/balance/${activeClientId}`);
+            if (data.error) {
+                $('balance').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
+            } else {
+                const s = data.account_summary;
+                $('balance').innerHTML = `
+                    <div class="grid-4">
+                        <div class="metric"><div class="metric-value">$${s.total_wallet_balance.toFixed(2)}</div><div class="metric-label">Total</div></div>
+                        <div class="metric"><div class="metric-value">$${s.available_balance.toFixed(2)}</div><div class="metric-label">Available</div></div>
+                        <div class="metric"><div class="metric-value ${s.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">$${s.total_unrealized_pnl.toFixed(2)}</div><div class="metric-label">P&L</div></div>
+                        <div class="metric"><div class="metric-value">${s.can_trade ? '✅' : '❌'}</div><div class="metric-label">Trade</div></div>
+                    </div>`;
+            }
+        }
+
+        async function refreshPositions() {
+            if (!activeClientId) {
+                console.warn('No active client ID for positions refresh');
+                return;
+            }
+            
+            console.log(`Fetching positions for client: ${activeClientId}`);
+            const data = await api(`/api/positions/${activeClientId}`);
+            
+            if (data.error) {
+                console.error('Positions API error:', data.error);
+                $('positions').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
+                return;
+            }
+            
+            console.log('Positions data received:', data);
+            
+            if (!data.positions || data.positions.length === 0) {
+                $('positions').innerHTML = '<p>No open futures positions</p>';
+                console.log('No positions found');
+                return;
+            }
+            
+            console.log(`Displaying ${data.positions.length} positions`);
+            $('positions').innerHTML = data.positions.map(p => `
+                <div class="item">
+                    <strong>${p.symbol} ${p.position_side}</strong>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
+                        <small>Amount: ${p.position_amount} | Entry: ${p.entry_price.toFixed(4)}</small>
+                        <span class="${p.unrealized_pnl >= 0 ? 'positive' : 'negative'}">${p.unrealized_pnl.toFixed(2)}</span>
+                    </div>
+                    ${p.mark_price ? `<small style="color: var(--text-muted);">Mark: ${p.mark_price.toFixed(4)}</small>` : ''}
+                </div>`).join('');
+        }
+
+        async function refreshEarn() {
+            if (!activeClientId) return;
+            status('Loading earn positions...');
+            const data = await api(`/api/earn/${activeClientId}`);
+            
+            if (data.error) {
+                $('earnPositions').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
+                $('earnSummary').style.display = 'none';
+                status('Earn API error: ' + data.error);
+                return;
+            }
+
+            if (data.success && data.summary) {
+                const summary = data.summary;
+                const positions = data.earn_positions || [];
                 
-                if error_code == -1111:
-                    return {
-                        "success": False,
-                        "error": f"Precision error: {formatted_quantity} {symbol}. Try different quantity.",
-                        "error_code": error_code,
-                        "binance_msg": error_msg,
-                        "suggestion": f"For {symbol}, try quantities like: {self.get_quantity_suggestions(symbol)}"
+                // Update summary metrics
+                $('earnBalance').textContent = `$${summary.total_earn_balance.toFixed(2)}`;
+                $('dailyRewards').textContent = `$${summary.daily_rewards.toFixed(4)}`;
+                $('flexibleCount').textContent = summary.flexible_count;
+                $('lockedCount').textContent = summary.locked_count;
+                
+                // Show summary if we have positions
+                if (summary.total_positions > 0) {
+                    $('earnSummary').style.display = 'grid';
+                    
+                    // Display individual positions
+                    if (positions.length > 0) {
+                        $('earnPositions').innerHTML = positions.map(pos => `
+                            <div class="earn-position">
+                                <h5>
+                                    <span class="earn-badge ${pos.type}">${pos.type.toUpperCase()}</span>
+                                    ${pos.asset}
+                                </h5>
+                                <div class="position-details">
+                                    <span>Amount: <strong>${pos.amount.toFixed(4)}</strong></span>
+                                    <span>APY: <strong>${pos.apy.toFixed(2)}%</strong></span>
+                                    <span>Daily: <strong>$${pos.daily_rewards.toFixed(4)}</strong></span>
+                                    ${pos.type === 'locked' ? `<span>Duration: <strong>${pos.duration} days</strong></span>` : ''}
+                                    ${pos.type === 'flexible' && pos.can_redeem !== undefined ? `<span>Redeemable: <strong>${pos.can_redeem ? 'Yes' : 'No'}</strong></span>` : ''}
+                                    ${pos.yesterday_rewards !== undefined ? `<span>Yesterday: <strong>$${pos.yesterday_rewards.toFixed(4)}</strong></span>` : ''}
+                                </div>
+                            </div>
+                        `).join('');
+                    } else {
+                        $('earnPositions').innerHTML = '<p>💎 Earn positions summary loaded, but no detailed positions available</p>';
                     }
-                elif error_code == -2019:
-                    return {
-                        "success": False,
-                        "error": "Insufficient balance for this trade",
-                        "error_code": error_code,
-                        "binance_msg": error_msg
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Binance error {error_code}: {error_msg}",
-                        "error_code": error_code,
-                        "binance_msg": error_msg
-                    }
-            
-        except Exception as e:
-            logger.error(f"❌ Order placement failed: {e}")
-            return {
-                "success": False,
-                "error": f"Order placement failed: {str(e)}"
-            }
-    
-    def get_quantity_suggestions(self, symbol: str) -> str:
-        """Get quantity suggestions for ANY trading pair"""
-        suggestions = {
-            "BTCUSDT": "0.001, 0.01, 0.1",
-            "ETHUSDT": "0.01, 0.1, 1", 
-            "SOLUSDT": "0.5, 1, 5, 10",
-            "AVAXUSDT": "0.5, 1, 5, 10",
-            "ADAUSDT": "50, 100, 500",
-            "DOTUSDT": "1, 5, 10, 50",
-            "LINKUSDT": "1, 5, 10, 25",
-            "MATICUSDT": "50, 100, 500",
-            "LTCUSDT": "0.1, 1, 5",
-            "BCHUSDT": "0.1, 1, 5",
-            "XRPUSDT": "10, 50, 100",
-            "XRPUSDC": "10, 50, 100"
-        }
-        return suggestions.get(symbol, "0.001, 0.01, 0.1, 1, 10")
-    
-    def get_earn_positions(self) -> dict:
-        """Get Binance Earn (Simple Earn) positions"""
-        try:
-            logger.info("🔍 Fetching Binance Earn positions...")
-            
-            # Get flexible savings positions
-            flexible_positions = self._get_flexible_positions()
-            
-            # Get locked savings positions  
-            locked_positions = self._get_locked_positions()
-            
-            # Calculate totals
-            total_earn_balance = 0
-            daily_rewards = 0
-            flexible_count = 0
-            locked_count = 0
-            
-            all_positions = []
-            
-            # Process flexible positions
-            if isinstance(flexible_positions, list):
-                flexible_count = len(flexible_positions)
-                for pos in flexible_positions:
-                    amount = float(pos.get('totalAmount', 0))
-                    total_earn_balance += amount
-                    daily_rewards += float(pos.get('latestAnnualPercentageRate', 0)) * amount / 365 / 100
                     
-                    all_positions.append({
-                        'type': 'flexible',
-                        'asset': pos.get('asset', ''),
-                        'amount': amount,
-                        'apy': float(pos.get('latestAnnualPercentageRate', 0)),
-                        'daily_rewards': float(pos.get('latestAnnualPercentageRate', 0)) * amount / 365 / 100,
-                        'can_redeem': pos.get('canRedeem', True),
-                        'tier_annual_percentage_rate': pos.get('tierAnnualPercentageRate', {}),
-                        'product_id': pos.get('productId', ''),
-                        'yesterday_rewards': float(pos.get('yesterdayRealTimeRewards', 0))
-                    })
-            
-            # Process locked positions
-            if isinstance(locked_positions, list):
-                locked_count = len(locked_positions)
-                for pos in locked_positions:
-                    amount = float(pos.get('amount', 0))
-                    total_earn_balance += amount
-                    apy = float(pos.get('apy', 0))
-                    daily_rewards += apy * amount / 365 / 100
-                    
-                    all_positions.append({
-                        'type': 'locked',
-                        'asset': pos.get('asset', ''),
-                        'amount': amount,
-                        'apy': apy,
-                        'daily_rewards': apy * amount / 365 / 100,
-                        'duration': pos.get('duration', 0),
-                        'purchase_time': pos.get('purchaseTime', 0),
-                        'redeem_date': pos.get('redeemDate', ''),
-                        'position_id': pos.get('positionId', ''),
-                        'product_id': pos.get('productId', ''),
-                        'status': pos.get('status', '')
-                    })
-            
-            logger.info(f"💎 Earn Summary: ${total_earn_balance:.2f} total, {flexible_count} flexible, {locked_count} locked")
-            
-            return {
-                'success': True,
-                'earn_positions': all_positions,
-                'summary': {
-                    'total_earn_balance': total_earn_balance,
-                    'daily_rewards': daily_rewards,
-                    'flexible_count': flexible_count,
-                    'locked_count': locked_count,
-                    'total_positions': flexible_count + locked_count
-                },
-                'message': f'Found {flexible_count} flexible and {locked_count} locked earn positions'
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting earn positions: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'earn_positions': [],
-                'summary': {
-                    'total_earn_balance': 0,
-                    'daily_rewards': 0,
-                    'flexible_count': 0,
-                    'locked_count': 0,
-                    'total_positions': 0
+                    status(`Earn loaded: $${summary.total_earn_balance.toFixed(2)} in ${summary.total_positions} positions`);
+                } else {
+                    $('earnPositions').innerHTML = '<p>💎 No earn positions found</p>';
+                    $('earnSummary').style.display = 'none';
+                    status('No earn positions found');
                 }
+            } else {
+                $('earnPositions').innerHTML = '<p>💎 Unable to load earn positions</p>';
+                $('earnSummary').style.display = 'none';
+                status('Earn data unavailable');
             }
-    
-    def _get_flexible_positions(self) -> list:
-        """Get flexible savings positions"""
-        try:
-            url = f"{self.spot_url}/sapi/v1/simple-earn/flexible/position"
-            timestamp = int(time.time() * 1000)
-            params = {
-                "timestamp": timestamp,
-                "size": 100  # Max positions to fetch
-            }
-            params["signature"] = self.generate_signature(params)
-            
-            response = self.session.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                rows = data.get('rows', [])
-                logger.info(f"✅ Found {len(rows)} flexible earn positions")
-                return rows
-            else:
-                logger.warning(f"⚠️ Flexible positions API error: HTTP {response.status_code}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"❌ Error getting flexible positions: {e}")
-            return []
-    
-    def _get_locked_positions(self) -> list:
-        """Get locked savings positions"""
-        try:
-            url = f"{self.spot_url}/sapi/v1/simple-earn/locked/position"
-            timestamp = int(time.time() * 1000)
-            params = {
-                "timestamp": timestamp,
-                "size": 100  # Max positions to fetch
-            }
-            params["signature"] = self.generate_signature(params)
-            
-            response = self.session.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                rows = data.get('rows', [])
-                logger.info(f"✅ Found {len(rows)} locked earn positions")
-                return rows
-            else:
-                logger.warning(f"⚠️ Locked positions API error: HTTP {response.status_code}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"❌ Error getting locked positions: {e}")
-            return []
-
-def parse_tradingview_template(raw_data: str, strategy_id: int) -> dict:
-    """Enhanced TradingView template parser"""
-    try:
-        logger.info(f"🔍 Parsing TradingView template: {raw_data}")
-        
-        clean_data = raw_data.strip()
-        parts = clean_data.split()
-        
-        logger.info(f"🔍 Split parts: {parts}")
-        
-        # Initialize defaults
-        symbol = "UNKNOWN"
-        action = "buy"
-        quantity = "0.001"
-        leverage = "1"
-        price = None
-        
-        # Extract symbol - SUPPORTS ALL CRYPTO PAIRS
-        crypto_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT", "ADAUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "LTCUSDT", "BCHUSDT", "XRPUSDT", "XRPUSDC"]
-        
-        symbol_found = False
-        for part in parts:
-            part_upper = part.upper()
-            if part_upper in crypto_symbols:
-                symbol = part_upper
-                symbol_found = True
-                break
-        
-        if not symbol_found:
-            for part in parts:
-                part_upper = part.upper()
-                if len(part_upper) >= 6 and (part_upper.endswith('USDT') or part_upper.endswith('USDC')):
-                    symbol = part_upper
-                    symbol_found = True
-                    break
-        
-        # Extract quantity
-        quantity_found = False
-        for i, part in enumerate(parts):
-            if part.replace('.', '').isdigit():
-                try:
-                    qty_value = float(part)
-                    if 0.001 <= qty_value <= 1000:
-                        quantity = str(qty_value)
-                        quantity_found = True
-                        logger.info(f"✅ Found quantity: {quantity}")
-                        break
-                except ValueError:
-                    continue
-            
-            if ':' in part:
-                try:
-                    key, value = part.split(':', 1)
-                    if key.lower() in ['quantity', 'qty', 'q', 'amount']:
-                        qty_value = float(value)
-                        if 0.001 <= qty_value <= 1000:
-                            quantity = str(qty_value)
-                            quantity_found = True
-                            logger.info(f"✅ Found quantity from key:value: {quantity}")
-                            break
-                except (ValueError, IndexError):
-                    continue
-        
-        # Extract leverage
-        leverage_found = False
-        for i, part in enumerate(parts):
-            if part.lower() == 'leverage':
-                try:
-                    if i + 1 < len(parts):
-                        leverage_value = int(parts[i + 1])
-                        if 1 <= leverage_value <= 125:
-                            leverage = str(leverage_value)
-                            leverage_found = True
-                            logger.info(f"✅ Found leverage: {leverage}")
-                            break
-                except (ValueError, IndexError):
-                    continue
-        
-        # Determine action
-        raw_lower = clean_data.lower()
-        if "short" in raw_lower or "sell" in raw_lower:
-            action = "sell"
-        elif "buy" in raw_lower or "long" in raw_lower:
-            action = "buy"
-        elif "close" in raw_lower or "exit" in raw_lower:
-            action = "close"
-        
-        # Apply symbol-specific defaults - WORKS WITH ALL PAIRS
-        if symbol.startswith("BTC") and not quantity_found:
-            quantity = "0.001"  # BTC pairs
-        elif symbol.startswith("ETH") and not quantity_found:
-            quantity = "0.01"   # ETH pairs
-        elif symbol.startswith("SOL") and not quantity_found:
-            quantity = "0.5"    # SOL pairs
-        elif symbol in ["XRPUSDC", "XRPUSDT"] and not quantity_found:
-            quantity = "10"     # XRP pairs
-        elif symbol in ["ADAUSDT", "MATICUSDT"] and not quantity_found:
-            quantity = "50"     # Low-price pairs
-        
-        template_issue = "{{strategy.order.alert_message}}" in raw_data
-        
-        logger.info(f"✅ Final extraction: symbol={symbol}, action={action}, quantity={quantity}, leverage={leverage}")
-        
-        return {
-            "action": action,
-            "symbol": symbol,
-            "quantity": quantity,
-            "leverage": leverage,
-            "price": price,
-            "source": "tradingview_template_working",
-            "strategy_id": str(strategy_id),
-            "parsing_method": "enhanced_v5_with_price_fix",
-            "raw_template": raw_data,
-            "debug_parts": parts,
-            "extraction_notes": {
-                "symbol_found": symbol_found,
-                "quantity_found": quantity_found,
-                "leverage_found": leverage_found,
-                "template_issue": template_issue,
-                "market_order": True
-            },
-            "warning": "Template variables not resolved by TradingView" if template_issue else None
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error parsing TradingView template: {e}")
-        return {
-            "action": "unknown", 
-            "symbol": "UNKNOWN", 
-            "quantity": "0.001",
-            "error": "template_parse_failed", 
-            "raw_data": raw_data
         }
 
-def init_database():
-    """Initialize SQLite database"""
-    try:
-        db_path = os.environ.get('DATABASE_PATH', 'strategy_analysis.db')
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Strategies table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS strategies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                total_signals INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # Signals table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_id INTEGER,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                symbol TEXT NOT NULL,
-                action TEXT NOT NULL,
-                quantity REAL,
-                price REAL,
-                raw_data TEXT,
-                FOREIGN KEY (strategy_id) REFERENCES strategies (id)
-            )
-        ''')
-        
-        # Create sample strategy if none exist
-        cursor.execute('SELECT COUNT(*) FROM strategies')
-        if cursor.fetchone()[0] == 0:
-            cursor.execute('''
-                INSERT INTO strategies (name, description)
-                VALUES (?, ?)
-            ''', (
-                "Sample Strategy",
-                "A sample strategy for webhook testing"
-            ))
-            logger.info("✅ Created sample strategy")
-        
-        conn.commit()
-        conn.close()
-        logger.info(f"✅ Database initialized at {db_path}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
-        return False
-
-# Track open positions for close signal processing
-def track_position(strategy_id: int, symbol: str, side: str, quantity: float, price: float):
-    """Track an open position"""
-    position_key = f"{strategy_id}_{symbol}"
-    open_positions[position_key] = {
-        'strategy_id': strategy_id,
-        'symbol': symbol,
-        'side': side,
-        'quantity': quantity,
-        'entry_price': price,
-        'timestamp': datetime.now()
-    }
-    logger.info(f"📍 Tracking position: {position_key} - {side} {quantity} {symbol} @ ${price}")
-
-def get_open_position(strategy_id: int, symbol: str) -> dict:
-    """Get tracked open position"""
-    position_key = f"{strategy_id}_{symbol}"
-    return open_positions.get(position_key)
-
-def close_position(strategy_id: int, symbol: str):
-    """Close tracked position"""
-    position_key = f"{strategy_id}_{symbol}"
-    if position_key in open_positions:
-        position = open_positions.pop(position_key)
-        logger.info(f"📍 Closed position: {position_key}")
-        return position
-    return None
-
-# Flask Routes
-@app.route('/')
-def home():
-    """Serve the main dashboard"""
-    try:
-        return render_template('simplified_index.html')
-    except Exception as e:
-        logger.error(f"Error loading template: {e}")
-        return jsonify({
-            "error": "Template not found",
-            "message": "Please ensure simplified_index.html is in the templates folder",
-            "status": "running",
-            "app": "Simplified Trading Platform",
-            "version": "4.0.0-simplified"
-        })
-
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    db_status = "connected" if init_database() else "error"
-    api_key = os.environ.get('BINANCE_API_KEY', '')
-    api_secret = os.environ.get('BINANCE_API_SECRET', '')
-    api_configured = bool(api_key and api_secret)
-    
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "database": db_status,
-        "version": "4.0.0-simplified",
-        "mode": "LIVE_TRADING",
-        "api_configured": api_configured,
-        "active_connections": len(api_clients),
-        "webhook_count": webhook_count,
-        "open_positions_tracked": len(open_positions),
-        "price_fetching": "enabled",
-        "earn_functionality": "enabled"
-    })
-
-@app.route('/api/connect', methods=['POST'])
-def connect_api():
-    """Connect to Binance LIVE API"""
-    try:
-        api_key = os.environ.get('BINANCE_API_KEY', '')
-        api_secret = os.environ.get('BINANCE_API_SECRET', '')
-        
-        if not api_key or not api_secret:
-            return jsonify({
-                "success": False, 
-                "error": "BINANCE_API_KEY and BINANCE_API_SECRET must be set in Railway environment variables"
-            }), 400
-        
-        # FIXED: Always use a single persistent client ID so the frontend can reliably reference it
-        client_id = "live_client"  # Fixed client ID
-        api_client = BinanceFuturesAPI(api_key=api_key, api_secret=api_secret)
-        
-        if not api_client.test_connection():
-            return jsonify({
-                "success": False, 
-                "error": "Failed to connect to Binance LIVE API. Check credentials."
-            }), 400
-        
-        # Overwrite or create the client entry each time to guarantee the key exists
-        api_clients[client_id] = api_client
-        logger.info(f"✅ Binance LIVE API connected: {client_id}")
-        
-        return jsonify({
-            "success": True, 
-            "client_id": client_id,
-            "mode": "LIVE_TRADING",
-            "message": "Connected to LIVE Binance API"
-        })
-    
-    except Exception as e:
-        logger.error(f"❌ Error connecting to LIVE API: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route('/api/strategies', methods=['GET'])
-def get_strategies():
-    """Get all strategies"""
-    try:
-        db_path = os.environ.get('DATABASE_PATH', 'strategy_analysis.db')
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM strategies ORDER BY created_at DESC')
-        strategies = cursor.fetchall()
-        conn.close()
-        
-        strategies_data = []
-        for s in strategies:
-            strategies_data.append({
-                'id': s[0], 
-                'name': s[1], 
-                'description': s[2], 
-                'created_at': s[3], 
-                'total_signals': s[4]
-            })
-        
-        return jsonify(strategies_data)
-        
-    except Exception as e:
-        logger.error(f"❌ Error getting strategies: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/strategies', methods=['POST'])
-def create_strategy():
-    """Create a new strategy"""
-    try:
-        data = request.json or {}
-        name = data.get('name')
-        description = data.get('description', '')
-        
-        if not name:
-            return jsonify({'error': 'Strategy name is required'}), 400
-        
-        db_path = os.environ.get('DATABASE_PATH', 'strategy_analysis.db')
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO strategies (name, description)
-            VALUES (?, ?)
-        ''', (name, description))
-        
-        strategy_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"✅ Strategy created: {name} (ID: {strategy_id})")
-        return jsonify({
-            'success': True,
-            'strategy_id': strategy_id,
-            'message': 'Strategy created successfully',
-            'webhook_url': f"/webhook/tradingview/strategy/{strategy_id}"
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error creating strategy: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/webhook/tradingview/strategy/<int:strategy_id>', methods=['POST'])
-def strategy_webhook(strategy_id):
-    """Strategy webhook with FIXED close signal processing"""
-    global webhook_count
-    try:
-        data = {}
-        raw_data = request.get_data(as_text=True)
-        webhook_count += 1
-        
-        logger.info(f"🎯 Strategy {strategy_id} webhook #{webhook_count}")
-        logger.info(f"🎯 Raw data: {raw_data}")
-        
-        # Parse data
-        try:
-            data = request.get_json(force=True) or {}
-            logger.info(f"🎯 Parsed as JSON: {data}")
-        except:
-            try:
-                if raw_data:
-                    data = json.loads(raw_data)
-                    logger.info(f"🎯 Parsed raw data as JSON: {data}")
-                else:
-                    data = {}
-            except:
-                data = parse_tradingview_template(raw_data, strategy_id)
-                logger.info(f"🎯 Parsed from template: {data}")
-        
-        if not data or (not data.get('action') and not data.get('symbol')):
-            logger.warning(f"⚠️ No valid data found")
-            return jsonify({
-                "status": "received_but_unparseable",
-                "message": "Webhook received but data format not recognized",
-                "strategy_id": strategy_id,
-                "raw_data": raw_data,
-                "timestamp": datetime.now().isoformat()
-            })
-        
-        # Extract signal data
-        symbol = data.get('symbol', 'UNKNOWN')
-        action = data.get('action', 'unknown').upper()
-        quantity_str = data.get('quantity', '0.001')
-        
-        try:
-            quantity_float = float(quantity_str)
-            if quantity_float <= 0:
-                quantity_float = 0.001
-                quantity_str = "0.001"
-        except (ValueError, TypeError):
-            quantity_float = 0.001
-            quantity_str = "0.001"
-        
-        # Get real market price
-        real_market_price = 0
-        if symbol != "UNKNOWN":
-            real_market_price = get_current_market_price(symbol)
-            logger.info(f"💰 REAL market price for {symbol}: ${real_market_price}")
-        
-        price = real_market_price if real_market_price > 0 else get_fallback_price(symbol)
-        
-        logger.info(f"📝 Processing signal: symbol={symbol}, action={action}, quantity={quantity_str}, REAL_PRICE=${price}")
-        
-        # Store signal in database
-        db_path = os.environ.get('DATABASE_PATH', 'strategy_analysis.db')
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO signals (strategy_id, symbol, action, quantity, price, raw_data)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            strategy_id, 
-            symbol,
-            action,
-            quantity_float,
-            price,
-            json.dumps({
-                **data,
-                "webhook_received": True,
-                "real_market_price": price,
-                "price_source": "binance_api" if real_market_price > 0 else "fallback"
-            })
-        ))
-        
-        signal_id = cursor.lastrowid
-        cursor.execute('UPDATE strategies SET total_signals = total_signals + 1 WHERE id = ?', (strategy_id,))
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"✅ Signal stored: ID={signal_id}, symbol={symbol}, action={action}, price=${price}")
-        
-        # Execute trade if API client available
-        execution_result = {"success": False, "message": "No API client connected"}
-        trade_executed = False
-        actual_execution_price = price
-        
-        if api_clients and symbol != "UNKNOWN" and action != "UNKNOWN":
-            client_id = list(api_clients.keys())[0]
-            client = api_clients[client_id]
-            
-            try:
-                trade_quantity = quantity_float
-                logger.info(f"💱 Attempting trade: {action} {trade_quantity} {symbol} @ expected ${price}")
-                
-                if action == "BUY":
-                    execution_result = client.place_order(symbol=symbol, side="BUY", quantity=trade_quantity)
-                    trade_executed = execution_result.get("success", False)
-                    if trade_executed:
-                        # Track the position for future close signals
-                        track_position(strategy_id, symbol, "LONG", trade_quantity, execution_result.get("execution_price", price))
-                        
-                elif action == "SELL":
-                    execution_result = client.place_order(symbol=symbol, side="SELL", quantity=trade_quantity)
-                    trade_executed = execution_result.get("success", False)
-                    if trade_executed:
-                        # Track the position for future close signals
-                        track_position(strategy_id, symbol, "SHORT", trade_quantity, execution_result.get("execution_price", price))
-                        
-                elif action == "CLOSE":
-                    # FIXED: Handle close signals properly
-                    logger.info(f"🔄 Processing CLOSE signal for {symbol}")
-                    
-                    # Check if we have a tracked position for this strategy and symbol
-                    open_position = get_open_position(strategy_id, symbol)
-                    
-                    if open_position:
-                        logger.info(f"📍 Found open position: {open_position}")
-                        
-                        # Determine the opposite side to close the position
-                        close_side = "SELL" if open_position['side'] == "LONG" else "BUY"
-                        close_quantity = open_position['quantity']
-                        
-                        logger.info(f"🔄 Closing position: {close_side} {close_quantity} {symbol}")
-                        execution_result = client.place_order(symbol=symbol, side=close_side, quantity=close_quantity)
-                        trade_executed = execution_result.get("success", False)
-                        
-                        if trade_executed:
-                            # Remove from tracked positions
-                            closed_position = close_position(strategy_id, symbol)
-                            logger.info(f"✅ Successfully closed position: {closed_position}")
-                            
-                            # Calculate P&L if possible
-                            if closed_position:
-                                entry_price = closed_position['entry_price']
-                                exit_price = execution_result.get("execution_price", price)
-                                pnl = 0
-                                
-                                if closed_position['side'] == "LONG":
-                                    pnl = (exit_price - entry_price) * close_quantity
-                                else:  # SHORT
-                                    pnl = (entry_price - exit_price) * close_quantity
-                                
-                                logger.info(f"📊 Position P&L: ${pnl:.2f} (Entry: ${entry_price}, Exit: ${exit_price})")
-                                execution_result["pnl"] = pnl
-                                execution_result["entry_price"] = entry_price
-                                execution_result["exit_price"] = exit_price
-                    else:
-                        logger.warning(f"⚠️ No open position found for {strategy_id}_{symbol}")
-                        execution_result = {
-                            "success": False, 
-                            "message": f"No open position found to close for {symbol}",
-                            "tracked_positions": len(open_positions),
-                            "position_keys": list(open_positions.keys())
-                        }
-                
-                # Get actual execution price from order result
-                if trade_executed and "execution_price" in execution_result:
-                    actual_execution_price = execution_result["execution_price"]
-                    logger.info(f"💰 Actual execution price: ${actual_execution_price}")
-                    
-                    # Update the signal record with actual execution price
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute('UPDATE signals SET price = ? WHERE id = ?', (actual_execution_price, signal_id))
-                    conn.commit()
-                    conn.close()
-                    
-                logger.info(f"💱 Trade execution result: {execution_result}")
-                    
-            except Exception as e:
-                execution_result = {"success": False, "error": str(e)}
-                logger.error(f"❌ Trade execution failed: {e}")
-        
-        # Prepare response
-        response_data = {
-            "status": "success",
-            "message": "Webhook processed successfully with REAL market price fetching",
-            "strategy_id": strategy_id,
-            "signal_id": signal_id,
-            "execution_result": execution_result,
-            "parsed_data": {
-                "symbol": symbol,
-                "action": action,
-                "quantity": quantity_str,
-                "quantity_float": quantity_float,
-                "price": actual_execution_price,
-                "market_price_fetched": price,
-                "leverage": data.get('leverage', '1'),
-                "source": data.get('source', 'direct')
-            },
-            "position_tracking": {
-                "total_tracked_positions": len(open_positions),
-                "position_keys": list(open_positions.keys()),
-                "action_processed": action
-            },
-            "price_info": {
-                "market_price_fetched": price,
-                "actual_execution_price": actual_execution_price,
-                "price_source": "binance_api" if real_market_price > 0 else "fallback",
-                "price_fix_enabled": True
-            },
-            "raw_data": raw_data,
-            "timestamp": datetime.now().isoformat()
+        async function refreshTracked() {
+            const data = await api('/api/tracked-positions');
+            if (data.success && data.tracked_positions.length) {
+                $('trackedPositions').innerHTML = data.tracked_positions.map(p => `
+                    <div class="item">
+                        <strong>${p.symbol} ${p.side}</strong>
+                        <small>Strategy: ${p.strategy_id} | Qty: ${p.quantity} | Entry: $${p.entry_price.toFixed(4)} | Age: ${p.age_minutes}m</small>
+                    </div>`).join('');
+            } else {
+                $('trackedPositions').innerHTML = '<p>No tracked positions</p>';
+            }
+            $('tracked').textContent = data.total_positions || 0;
         }
-        
-        return jsonify(response_data)
-        
-    except Exception as e:
-        logger.error(f"❌ Error processing strategy webhook: {e}")
-        return jsonify({
-            "status": "error", 
-            "message": str(e),
-            "raw_data": request.get_data(as_text=True),
-            "help": "Check the webhook configuration and data format"
-        }), 500
 
-@app.route('/api/webhooks/activity')
-def get_webhook_activity():
-    """Get recent webhook activity"""
-    try:
-        db_path = os.environ.get('DATABASE_PATH', 'strategy_analysis.db')
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT s.id, s.strategy_id, s.timestamp, s.symbol, s.action, 
-                   s.quantity, s.price, s.raw_data, st.name as strategy_name
-            FROM signals s
-            LEFT JOIN strategies st ON s.strategy_id = st.id
-            ORDER BY s.timestamp DESC 
-            LIMIT 50
-        ''')
-        
-        signals = cursor.fetchall()
-        conn.close()
-        
-        webhook_activity = []
-        for signal in signals:
-            try:
-                raw_data_dict = json.loads(signal[7]) if signal[7] else {}
-            except:
-                raw_data_dict = {}
+        async function loadStrategies() {
+            strategies = await api('/api/strategies');
+            $('strategies').textContent = strategies.length;
+            $('signals').textContent = strategies.reduce((sum, s) => sum + s.total_signals, 0);
             
-            webhook_activity.append({
-                "signal_id": signal[0],
-                "strategy_id": signal[1],
-                "strategy_name": signal[8] or f"Strategy {signal[1]}",
-                "timestamp": signal[2],
-                "status": "success",
-                "parsed_data": {
-                    "action": signal[4],
-                    "symbol": signal[3],
-                    "quantity": str(signal[5]) if signal[5] else "0",
-                    "price": f"{signal[6]:.4f}" if signal[6] and signal[6] > 0 else "0.0000"
-                }
-            })
-        
-        return jsonify(webhook_activity)
-        
-    except Exception as e:
-        logger.error(f"❌ Error getting webhook activity: {e}")
-        return jsonify([])
+            $('strategiesList').innerHTML = strategies.length ? strategies.map(s => `
+                <div class="item">
+                    <h4>${s.name}</h4>
+                    <p>${s.description || 'No description'}</p>
+                    <small>ID: ${s.id} | Signals: ${s.total_signals}</small>
+                    <div style="margin-top: 10px;">
+                        <code style="font-size: 0.7em; word-break: break-all;">${location.origin}/webhook/tradingview/strategy/${s.id}</code>
+                        <button class="btn" onclick="copyURL(${s.id})" style="font-size: 12px; padding: 4px 8px; margin-top: 5px;">📋 Copy</button>
+                    </div>
+                </div>`).join('') : '<p>No strategies yet</p>';
+        }
 
-# FIXED: Route parameter fixes – balance & positions now require <client_id>
-@app.route('/api/balance/<client_id>')
-def get_balance(client_id):
-    """Get account balance"""
-    if client_id not in api_clients:
-        return jsonify({"error": "Client not found"}), 404
-    
-    try:
-        balance_data = api_clients[client_id].get_balance()
-        return jsonify(balance_data)
-    except Exception as e:
-        logger.error(f"❌ Error getting balance: {e}")
-        return jsonify({"error": str(e)}), 500
+        async function createStrategy() {
+            const name = $('strategyName').value;
+            if (!name) return status('Enter strategy name');
+            
+            const result = await api('/api/strategies', {
+                method: 'POST',
+                body: JSON.stringify({ name, description: $('strategyDesc').value })
+            });
+            
+            if (result.success) {
+                $('strategyName').value = '';
+                $('strategyDesc').value = '';
+                loadStrategies();
+                status(`Strategy "${name}" created! ID: ${result.strategy_id}`);
+            } else {
+                status('Error: ' + result.error);
+            }
+        }
 
-@app.route('/api/positions/<client_id>')
-def get_positions(client_id):
-    """Get current positions"""
-    if client_id not in api_clients:
-        return jsonify({"error": "Client not found"}), 404
-    
-    try:
-        positions = api_clients[client_id].get_positions()
-        return jsonify({"positions": positions})
-    except Exception as e:
-        logger.error(f"❌ Error getting positions: {e}")
-        return jsonify({"error": str(e)}), 500
+        async function refreshWebhooks() {
+            webhookData = await api('/api/webhooks/activity');
+            $('totalWebhooks').textContent = webhookData.length;
+            $('lastWebhook').textContent = webhookData.length ? new Date(webhookData[0].timestamp).toLocaleTimeString() : 'Never';
+            
+            // Live feed
+            $('liveFeed').innerHTML = webhookData.slice(0, 5).map(w => `
+                <div class="feed-item">
+                    <strong>${new Date(w.timestamp).toLocaleTimeString()} - ${w.strategy_name}</strong>
+                    <div style="font-size: 0.8em;">Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Price: $${w.parsed_data.price}</div>
+                </div>`).join('') || '<p>No recent activity</p>';
+            
+            // Activity list
+            $('activityList').innerHTML = webhookData.slice(0, 10).map(w => `
+                <div class="alert alert-success" style="margin: 5px 0; padding: 8px;">
+                    <strong>${w.strategy_name}</strong> - ${new Date(w.timestamp).toLocaleString()}<br>
+                    <small>Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Qty: ${w.parsed_data.quantity} | Price: $${w.parsed_data.price}</small>
+                </div>`).join('') || '<p>No webhook activity</p>';
+        }
 
-# UPDATED – Real Earn functionality with live Binance API
-@app.route('/api/earn/<client_id>', methods=['GET'])
-def get_earn(client_id):
-    """Get Binance Earn (Simple Earn) positions"""
-    if client_id not in api_clients:
-        return jsonify({"error": "Client not found"}), 404
-    
-    try:
-        earn_data = api_clients[client_id].get_earn_positions()
-        return jsonify(earn_data)
-    except Exception as e:
-        logger.error(f"❌ Error getting earn positions: {e}")
-        return jsonify({"error": str(e)}), 500
+        async function testParsing() {
+            const message = $('testMessage').value;
+            if (!message) return status('Enter test message');
+            
+            const result = await api('/webhook/debug-parse', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: message
+            });
+            
+            $('parseResult').innerHTML = `
+                <div class="help" style="margin-top: 10px;">
+                    <h5>🔍 Parsing Results</h5>
+                    <p><strong>Action:</strong> ${result.parsed_result.action}</p>
+                    <p><strong>Symbol:</strong> ${result.parsed_result.symbol}</p>
+                    <p><strong>Quantity:</strong> ${result.parsed_result.quantity}</p>
+                    <p><strong>Price:</strong> Will fetch from Binance API</p>
+                </div>`;
+        }
 
-@app.route('/api/binance/info')
-def binance_info():
-    """Information about Binance Futures trading"""
-    return jsonify({
-        "trading_type": "USDM Futures (USD-M Perpetual)",
-        "api_endpoint": "https://fapi.binance.com",
-        "earn_endpoint": "https://api.binance.com/sapi",
-        "explanation": {
-            "why_usdm": "USDM (USD-Margined) futures use stablecoins like USDT as collateral",
-            "leverage": "Supports up to 125x leverage depending on symbol",
-            "symbols": "Trades pairs like XRPUSDC, BTCUSDT, ETHUSDT",
-            "margin_type": "Cross margin by default, can switch to isolated",
-            "earn_info": "Simple Earn provides flexible and locked savings products"
-        },
-        "current_config": {
-            "testnet": False,
-            "live_trading": True,
-            "margin_mode": "Cross margin (default)",
-            "position_mode": "One-way mode (default)",
-            "price_fetching": "enabled",
-            "earn_functionality": "enabled"
-        },
-        "symbol_precision": SYMBOL_PRECISION
-    })
+        function copyURL(id) {
+            const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
+            navigator.clipboard.writeText(url);
+            status(`Webhook URL copied for strategy ${id}!`);
+        }
 
-@app.route('/api/tracked-positions')
-def get_tracked_positions():
-    """Get currently tracked positions"""
-    try:
-        tracked_data = []
-        for position_key, position in open_positions.items():
-            tracked_data.append({
-                "position_key": position_key,
-                "strategy_id": position["strategy_id"],
-                "symbol": position["symbol"],
-                "side": position["side"],
-                "quantity": position["quantity"],
-                "entry_price": position["entry_price"],
-                "timestamp": position["timestamp"].isoformat(),
-                "age_minutes": int((datetime.now() - position["timestamp"]).total_seconds() / 60)
-            })
-        
-        return jsonify({
-            "success": True,
-            "tracked_positions": tracked_data,
-            "total_positions": len(open_positions),
-            "message": "These positions are tracked for close signal processing"
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Error getting tracked positions: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/webhook/debug-parse', methods=['POST'])
-def debug_parse():
-    """Debug endpoint to test message parsing"""
-    try:
-        raw_data = request.get_data(as_text=True)
-        parsed_result = parse_tradingview_template(raw_data, 999)
-        
-        return jsonify({
-            "raw_message": raw_data,
-            "parsed_result": parsed_result,
-            "parts_breakdown": raw_data.split(),
-            "timestamp": datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# Error handlers
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({"success": False, "error": "Endpoint not found"}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(f"❌ Internal server error: {error}")
-    return jsonify({"success": False, "error": "Internal server error"}), 500
-
-# Initialize application
-def initialize_application():
-    """Initialize the application"""
-    try:
-        logger.info("🔥 Initializing SIMPLIFIED Trading Platform")
-        logger.info("=" * 60)
-        
-        if init_database():
-            logger.info("✅ Database initialized")
-        else:
-            logger.error("❌ Database initialization failed")
-        
-        api_key = os.environ.get('BINANCE_API_KEY', '')
-        api_secret = os.environ.get('BINANCE_API_SECRET', '')
-        
-        if api_key and api_secret:
-            logger.info("✅ Binance API credentials configured")
-            logger.info(f"🔥 LIVE TRADING MODE - API Key: {api_key[:8]}...{api_key[-4:]}")
-        else:
-            logger.warning("⚠️ Binance API credentials not configured")
-        
-        logger.info("🔥 REAL MARKET PRICE FETCHING ENABLED")
-        logger.info("✅ CLOSE SIGNAL PROCESSING FIXED")
-        logger.info("💎 BINANCE EARN FUNCTIONALITY ENABLED")
-        logger.info("=" * 60)
-        logger.info("🎉 Simplified application initialized successfully!")
-        logger.info("🎯 Focus: Wallet Management + Working Webhooks + Earn")
-        
-    except Exception as e:
-        logger.error(f"❌ Initialization failed: {e}")
-        raise
-
-# Initialize on startup
-initialize_application()
-
-# Main execution
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8080))
-    host = os.environ.get('HOST', '0.0.0.0')
-    
-    logger.info(f"🌐 Starting Simplified Trading Platform on {host}:{port}")
-    logger.info(f"🎯 SIMPLIFIED MODE: Wallet + Working Webhooks + Earn")
-    
-    try:
-        app.run(
-            host=host,
-            port=port,
-            debug=False,
-            threaded=True,
-            use_reloader=False
-        )
-    except Exception as e:
-        logger.error(f"❌ Failed to start server: {e}")
-        raise
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refresh();
+            loadStrategies();
+            refreshWebhooks();
+            status('Efficient Trading Platform loaded with Earn functionality');
+            
+            // Optimized auto-refresh with debouncing (reduces API calls)
+            setInterval(debouncedRefresh, 30000);
+        });
+    </script>
+</body>
+</html>
