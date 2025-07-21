@@ -139,6 +139,7 @@ class BinanceFuturesAPI:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = "https://fapi.binance.com"
+        self.spot_url = "https://api.binance.com"  # For earn endpoints
         self.session = requests.Session()
         self.session.headers.update({"X-MBX-APIKEY": self.api_key})
     
@@ -326,6 +327,150 @@ class BinanceFuturesAPI:
             "XRPUSDC": "10, 50, 100"
         }
         return suggestions.get(symbol, "0.001, 0.01, 0.1, 1, 10")
+    
+    def get_earn_positions(self) -> dict:
+        """Get Binance Earn (Simple Earn) positions"""
+        try:
+            logger.info("🔍 Fetching Binance Earn positions...")
+            
+            # Get flexible savings positions
+            flexible_positions = self._get_flexible_positions()
+            
+            # Get locked savings positions  
+            locked_positions = self._get_locked_positions()
+            
+            # Calculate totals
+            total_earn_balance = 0
+            daily_rewards = 0
+            flexible_count = 0
+            locked_count = 0
+            
+            all_positions = []
+            
+            # Process flexible positions
+            if isinstance(flexible_positions, list):
+                flexible_count = len(flexible_positions)
+                for pos in flexible_positions:
+                    amount = float(pos.get('totalAmount', 0))
+                    total_earn_balance += amount
+                    daily_rewards += float(pos.get('latestAnnualPercentageRate', 0)) * amount / 365 / 100
+                    
+                    all_positions.append({
+                        'type': 'flexible',
+                        'asset': pos.get('asset', ''),
+                        'amount': amount,
+                        'apy': float(pos.get('latestAnnualPercentageRate', 0)),
+                        'daily_rewards': float(pos.get('latestAnnualPercentageRate', 0)) * amount / 365 / 100,
+                        'can_redeem': pos.get('canRedeem', True),
+                        'tier_annual_percentage_rate': pos.get('tierAnnualPercentageRate', {}),
+                        'product_id': pos.get('productId', ''),
+                        'yesterday_rewards': float(pos.get('yesterdayRealTimeRewards', 0))
+                    })
+            
+            # Process locked positions
+            if isinstance(locked_positions, list):
+                locked_count = len(locked_positions)
+                for pos in locked_positions:
+                    amount = float(pos.get('amount', 0))
+                    total_earn_balance += amount
+                    apy = float(pos.get('apy', 0))
+                    daily_rewards += apy * amount / 365 / 100
+                    
+                    all_positions.append({
+                        'type': 'locked',
+                        'asset': pos.get('asset', ''),
+                        'amount': amount,
+                        'apy': apy,
+                        'daily_rewards': apy * amount / 365 / 100,
+                        'duration': pos.get('duration', 0),
+                        'purchase_time': pos.get('purchaseTime', 0),
+                        'redeem_date': pos.get('redeemDate', ''),
+                        'position_id': pos.get('positionId', ''),
+                        'product_id': pos.get('productId', ''),
+                        'status': pos.get('status', '')
+                    })
+            
+            logger.info(f"💎 Earn Summary: ${total_earn_balance:.2f} total, {flexible_count} flexible, {locked_count} locked")
+            
+            return {
+                'success': True,
+                'earn_positions': all_positions,
+                'summary': {
+                    'total_earn_balance': total_earn_balance,
+                    'daily_rewards': daily_rewards,
+                    'flexible_count': flexible_count,
+                    'locked_count': locked_count,
+                    'total_positions': flexible_count + locked_count
+                },
+                'message': f'Found {flexible_count} flexible and {locked_count} locked earn positions'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting earn positions: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'earn_positions': [],
+                'summary': {
+                    'total_earn_balance': 0,
+                    'daily_rewards': 0,
+                    'flexible_count': 0,
+                    'locked_count': 0,
+                    'total_positions': 0
+                }
+            }
+    
+    def _get_flexible_positions(self) -> list:
+        """Get flexible savings positions"""
+        try:
+            url = f"{self.spot_url}/sapi/v1/simple-earn/flexible/position"
+            timestamp = int(time.time() * 1000)
+            params = {
+                "timestamp": timestamp,
+                "size": 100  # Max positions to fetch
+            }
+            params["signature"] = self.generate_signature(params)
+            
+            response = self.session.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                rows = data.get('rows', [])
+                logger.info(f"✅ Found {len(rows)} flexible earn positions")
+                return rows
+            else:
+                logger.warning(f"⚠️ Flexible positions API error: HTTP {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting flexible positions: {e}")
+            return []
+    
+    def _get_locked_positions(self) -> list:
+        """Get locked savings positions"""
+        try:
+            url = f"{self.spot_url}/sapi/v1/simple-earn/locked/position"
+            timestamp = int(time.time() * 1000)
+            params = {
+                "timestamp": timestamp,
+                "size": 100  # Max positions to fetch
+            }
+            params["signature"] = self.generate_signature(params)
+            
+            response = self.session.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                rows = data.get('rows', [])
+                logger.info(f"✅ Found {len(rows)} locked earn positions")
+                return rows
+            else:
+                logger.warning(f"⚠️ Locked positions API error: HTTP {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"❌ Error getting locked positions: {e}")
+            return []
 
 def parse_tradingview_template(raw_data: str, strategy_id: int) -> dict:
     """Enhanced TradingView template parser"""
@@ -577,7 +722,8 @@ def health():
         "active_connections": len(api_clients),
         "webhook_count": webhook_count,
         "open_positions_tracked": len(open_positions),
-        "price_fetching": "enabled"
+        "price_fetching": "enabled",
+        "earn_functionality": "enabled"
     })
 
 @app.route('/api/connect', methods=['POST'])
@@ -981,21 +1127,19 @@ def get_positions(client_id):
         logger.error(f"❌ Error getting positions: {e}")
         return jsonify({"error": str(e)}), 500
 
-# NEW – Earn (Savings/Staking) Placeholder
+# UPDATED – Real Earn functionality with live Binance API
 @app.route('/api/earn/<client_id>', methods=['GET'])
 def get_earn(client_id):
-    """Placeholder endpoint for Binance Earn positions.
-    
-    Provides a static response for now so that the frontend does not raise
-    404 errors while the real implementation is still under development.
-    """
+    """Get Binance Earn (Simple Earn) positions"""
     if client_id not in api_clients:
         return jsonify({"error": "Client not found"}), 404
     
-    return jsonify({
-        "earn_positions": [],
-        "message": "Earn functionality not implemented yet"
-    })
+    try:
+        earn_data = api_clients[client_id].get_earn_positions()
+        return jsonify(earn_data)
+    except Exception as e:
+        logger.error(f"❌ Error getting earn positions: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/binance/info')
 def binance_info():
@@ -1003,18 +1147,21 @@ def binance_info():
     return jsonify({
         "trading_type": "USDM Futures (USD-M Perpetual)",
         "api_endpoint": "https://fapi.binance.com",
+        "earn_endpoint": "https://api.binance.com/sapi",
         "explanation": {
             "why_usdm": "USDM (USD-Margined) futures use stablecoins like USDT as collateral",
             "leverage": "Supports up to 125x leverage depending on symbol",
             "symbols": "Trades pairs like XRPUSDC, BTCUSDT, ETHUSDT",
-            "margin_type": "Cross margin by default, can switch to isolated"
+            "margin_type": "Cross margin by default, can switch to isolated",
+            "earn_info": "Simple Earn provides flexible and locked savings products"
         },
         "current_config": {
             "testnet": False,
             "live_trading": True,
             "margin_mode": "Cross margin (default)",
             "position_mode": "One-way mode (default)",
-            "price_fetching": "enabled"
+            "price_fetching": "enabled",
+            "earn_functionality": "enabled"
         },
         "symbol_precision": SYMBOL_PRECISION
     })
@@ -1096,9 +1243,10 @@ def initialize_application():
         
         logger.info("🔥 REAL MARKET PRICE FETCHING ENABLED")
         logger.info("✅ CLOSE SIGNAL PROCESSING FIXED")
+        logger.info("💎 BINANCE EARN FUNCTIONALITY ENABLED")
         logger.info("=" * 60)
         logger.info("🎉 Simplified application initialized successfully!")
-        logger.info("🎯 Focus: Wallet Management + Working Webhooks")
+        logger.info("🎯 Focus: Wallet Management + Working Webhooks + Earn")
         
     except Exception as e:
         logger.error(f"❌ Initialization failed: {e}")
@@ -1113,7 +1261,7 @@ if __name__ == "__main__":
     host = os.environ.get('HOST', '0.0.0.0')
     
     logger.info(f"🌐 Starting Simplified Trading Platform on {host}:{port}")
-    logger.info(f"🎯 SIMPLIFIED MODE: Wallet + Working Webhooks")
+    logger.info(f"🎯 SIMPLIFIED MODE: Wallet + Working Webhooks + Earn")
     
     try:
         app.run(
