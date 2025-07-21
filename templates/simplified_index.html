@@ -1,61 +1,467 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Trading Dashboard (fixed)</title>
-  <style>
-    body {font-family: system-ui; margin: 0; padding: 2rem; background: #111; color:#eee}
-    h1   {margin-top: 0; font-size: 1.8rem}
-    .btn {padding: .5rem 1rem; border: 1px solid #fff; background: none; color:#fff; cursor: pointer}
-    .flex{display:flex; gap:2rem; flex-wrap: wrap}
-    .card{background:#222; padding:1rem; border-radius:4px; min-width:260px}
-    pre {white-space: pre-wrap; word-break: break-word}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Efficient Trading Platform</title>
+    <style>
+        :root {
+            --primary: #244c48; --secondary: #183431; --accent: #9c4d30;
+            --danger: #962c2f; --bg-dark: #0d1117; --bg-card: #21262d;
+            --border: #30363d; --text: #f0f6fc; --text-muted: #8b949e;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg-dark); color: var(--text); padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: #161b22; border-radius: 12px; padding: 30px; border: 1px solid var(--border); }
+        
+        .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid var(--border); }
+        .header h1 { font-size: 2.2em; margin-bottom: 8px; }
+        .badge { background: linear-gradient(45deg, var(--danger), var(--accent)); color: white; padding: 6px 15px; border-radius: 15px; font-size: 0.9em; margin-left: 10px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        
+        .status-panel { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; padding: 20px; border-radius: 10px; margin-bottom: 30px; }
+        .btn { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s; margin: 5px; }
+        .btn:hover { background: var(--secondary); transform: translateY(-1px); }
+        .btn.danger { background: var(--danger); }
+        .btn.info { background: var(--secondary); }
+        
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+        .card h3 { margin-bottom: 15px; }
+        
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-dark); color: var(--text); }
+        .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(36, 76, 72, 0.3); }
+        
+        .alert { padding: 12px; border-radius: 6px; margin: 10px 0; }
+        .alert-success { background: rgba(36, 76, 72, 0.1); border: 1px solid var(--primary); color: #3fb950; }
+        .alert-danger { background: rgba(150, 44, 47, 0.1); border: 1px solid var(--danger); color: var(--danger); }
+        .alert-info { background: rgba(24, 52, 49, 0.1); border: 1px solid var(--secondary); color: #58a6ff; }
+        
+        .metric { text-align: center; padding: 15px; background: var(--bg-dark); border-radius: 8px; border: 1px solid var(--border); }
+        .metric-value { font-size: 1.8em; font-weight: bold; color: #58a6ff; margin-bottom: 5px; }
+        .metric-label { font-size: 0.9em; color: var(--text-muted); }
+        .positive { color: var(--primary); }
+        .negative { color: var(--danger); }
+        
+        .nav-tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+        .nav-tab { padding: 12px 20px; cursor: pointer; border: none; background: none; font-size: 14px; color: var(--text-muted); border-bottom: 3px solid transparent; font-weight: 500; }
+        .nav-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .nav-tab:hover { color: var(--text); }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .item { background: var(--bg-dark); padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid var(--border); }
+        .feed { max-height: 300px; overflow-y: auto; background: var(--bg-dark); padding: 10px; border-radius: 6px; border: 1px solid var(--border); }
+        .feed-item { background: var(--bg-card); padding: 8px; margin: 5px 0; border-radius: 4px; border-left: 3px solid var(--primary); }
+        
+        .status-bar { position: fixed; bottom: 20px; right: 20px; background: #142924; color: white; padding: 10px 15px; border-radius: 6px; font-size: 14px; max-width: 400px; z-index: 1000; }
+        .help { background: var(--bg-dark); border: 1px solid var(--border); padding: 15px; border-radius: 6px; margin: 10px 0; font-size: 0.9em; }
+        .help h5 { color: var(--primary); margin-bottom: 8px; }
+        .help code { background: var(--bg-card); padding: 2px 6px; border-radius: 3px; }
+    </style>
 </head>
 <body>
-  <h1>Trading Dashboard</h1>
-  <button id="connect" class="btn">Connect Binance API</button>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ Efficient Trading Platform <span class="badge">LIVE</span></h1>
+            <p>Streamlined for maximum performance - Wallet + Webhooks</p>
+        </div>
 
-  <div class="flex">
-    <div class="card">
-      <h2>Balance</h2>
-      <pre id="balance">—</pre>
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('wallet')">💼 Wallet</button>
+            <button class="nav-tab" onclick="switchTab('strategies')">🎯 Strategies</button>
+            <button class="nav-tab" onclick="switchTab('webhooks')">🔌 Webhooks</button>
+        </div>
+
+        <!-- Wallet Tab -->
+        <div id="wallet" class="tab-content active">
+            <div class="status-panel">
+                <h3>🔐 API Connection</h3>
+                <p id="status">Checking...</p>
+                <div class="alert alert-danger">⚠️ LIVE TRADING MODE - Real money!</div>
+                <div class="alert alert-success">✅ Real prices + Close signals fixed</div>
+                <button class="btn" onclick="connect()">Connect Binance API</button>
+                <button class="btn" onclick="refresh()">🔄 Refresh</button>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>📊 Overview</h3>
+                    <div class="grid-4">
+                        <div class="metric"><div class="metric-value" id="strategies">0</div><div class="metric-label">Strategies</div></div>
+                        <div class="metric"><div class="metric-value" id="webhooks">0</div><div class="metric-label">Webhooks</div></div>
+                        <div class="metric"><div class="metric-value" id="signals">0</div><div class="metric-label">Signals</div></div>
+                        <div class="metric"><div class="metric-value" id="tracked">0</div><div class="metric-label">Tracked</div></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>💰 Balance</h3>
+                    <div id="balance">Connect to API to view balance</div>
+                    <button class="btn" onclick="refreshBalance()">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>📍 Positions</h3>
+                <div id="positions">Connect to API to view positions</div>
+                <button class="btn" onclick="refreshPositions()">🔄 Refresh</button>
+            </div>
+
+            <div class="card">
+                <h3>💎 Earn Positions</h3>
+                <div id="earnPositions">Connect to API to view earn positions</div>
+                <div class="grid-4" id="earnSummary" style="margin-top: 15px; display: none;">
+                    <div class="metric"><div class="metric-value" id="earnBalance">$0</div><div class="metric-label">Total Earn</div></div>
+                    <div class="metric"><div class="metric-value" id="dailyRewards">$0</div><div class="metric-label">Daily Rewards</div></div>
+                    <div class="metric"><div class="metric-value" id="flexibleCount">0</div><div class="metric-label">Flexible</div></div>
+                    <div class="metric"><div class="metric-value" id="lockedCount">0</div><div class="metric-label">Locked</div></div>
+                </div>
+                <button class="btn" onclick="refreshEarn()">💎 Refresh Earn</button>
+            </div>
+
+            <div class="card">
+                <h3>📍 Tracked Positions</h3>
+                <div id="trackedPositions">No tracked positions</div>
+                <button class="btn" onclick="refreshTracked()">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <!-- Strategies Tab -->
+        <div id="strategies" class="tab-content">
+            <div class="grid">
+                <div class="card">
+                    <h3>🎯 Create Strategy</h3>
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input id="strategyName" placeholder="My Strategy">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <input id="strategyDesc" placeholder="Strategy description">
+                    </div>
+                    <div class="help">
+                        <h5>💡 Webhook Format</h5>
+                        <p>Use in TradingView alerts:</p>
+                        <p><code>buy BTCUSDT 0.01</code> - Opens Bitcoin long</p>
+                        <p><code>close BTCUSDT</code> - Closes Bitcoin position</p>
+                    </div>
+                    <button class="btn" onclick="createStrategy()" style="width: 100%;">Create Strategy</button>
+                </div>
+
+                <div class="card">
+                    <h3>📋 My Strategies</h3>
+                    <button class="btn" onclick="loadStrategies()" style="float: right;">🔄</button>
+                    <div id="strategiesList">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Webhooks Tab -->
+        <div id="webhooks" class="tab-content">
+            <div class="card">
+                <h3>🔌 Webhook Activity</h3>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <span class="badge">🟢 MONITORING</span>
+                    <button class="btn" onclick="refreshWebhooks()">🔄 Refresh</button>
+                </div>
+
+                <div class="alert alert-success">
+                    <h5>✅ Close Signals Working!</h5>
+                    <p>Send <code>close SYMBOL</code> to close tracked positions</p>
+                </div>
+
+                <div class="grid">
+                    <div class="card">
+                        <h4>📊 Stats</h4>
+                        <div class="grid-4">
+                            <div class="metric"><div class="metric-value" id="totalWebhooks">0</div><div class="metric-label">Total</div></div>
+                            <div class="metric"><div class="metric-value" id="successTrades">0</div><div class="metric-label">Success</div></div>
+                            <div class="metric"><div class="metric-value" id="failedWebhooks">0</div><div class="metric-label">Failed</div></div>
+                            <div class="metric"><div class="metric-value" id="lastWebhook">Never</div><div class="metric-label">Last</div></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h4>⚡ Live Feed</h4>
+                        <div id="liveFeed" class="feed">Waiting for signals...</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h4>📋 Recent Activity</h4>
+                    <div id="activityList">No activity yet</div>
+                </div>
+
+                <div class="card">
+                    <h4>🧪 Test Parsing</h4>
+                    <div class="form-group">
+                        <input id="testMessage" placeholder="buy BTCUSDT 0.01" style="font-family: monospace;">
+                    </div>
+                    <button class="btn" onclick="testParsing()">🔍 Test</button>
+                    <div class="help">
+                        <h5>Examples (ALL PAIRS):</h5>
+                        <p><code>buy BTCUSDT 0.01</code> - Bitcoin long</p>
+                        <p><code>sell ETHUSDT 0.1</code> - Ethereum short</p>
+                        <p><code>buy SOLUSDT 2</code> - Solana long</p>
+                    </div>
+                    <div id="parseResult"></div>
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="card">
-      <h2>Positions</h2>
-      <pre id="positions">—</pre>
-    </div>
-    <div class="card">
-      <h2>Earn</h2>
-      <pre id="earn">—</pre>
-    </div>
-  </div>
 
-  <script>
-    let clientId = null;
-    const getJSON = path => fetch(path).then(r => r.json());
+    <div class="status-bar" id="statusBar">Efficient Trading Platform - Ready</div>
 
-    async function refresh() {
-      if (!clientId) return;
-      document.getElementById('balance').textContent   =
-          JSON.stringify(await getJSON(`/api/balance/${clientId}`  ), null, 2);
-      document.getElementById('positions').textContent =
-          JSON.stringify(await getJSON(`/api/positions/${clientId}`), null, 2);
-      document.getElementById('earn').textContent      =
-          JSON.stringify(await getJSON(`/api/earn/${clientId}`     ), null, 2);
-    }
-    setInterval(refresh, 20000);
+    <script>
+        // Global state for active client ID
+        let activeClientId = null;
+        let isConnected = false;
+        let strategies = [];
+        let webhookData = [];
+        let refreshTimeout = null;
 
-    document.getElementById('connect').onclick = async () => {
-      const res = await fetch('/api/connect', {method: 'POST'}).then(r => r.json());
-      if (res.success) {
-        clientId = res.client_id;
-        alert('Connected as ' + clientId);
-        refresh();
-      } else {
-        alert(res.error);
-      }
-    };
-  </script>
+        // Optimized utilities
+        const $ = id => document.getElementById(id);
+        const show = id => $(id).classList.add('active');
+        const hide = id => $(id).classList.remove('active');
+        const status = msg => $('statusBar').textContent = `${new Date().toLocaleTimeString()}: ${msg}`;
+        
+        // Generic helper to call the backend
+        const api = async (url, options = {}) => {
+            try {
+                const response = await fetch(url, { 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    ...options 
+                });
+                return await response.json();
+            } catch (e) {
+                return { error: e.message };
+            }
+        };
+
+        // Optimized DOM updates with batch operations
+        const updateMetrics = (data) => {
+            const updates = [
+                ['strategies', data.strategies || 0],
+                ['webhooks', data.webhook_count || 0], 
+                ['tracked', data.tracked_positions || 0]
+            ];
+            updates.forEach(([id, value]) => $(id).textContent = value);
+        };
+
+        // Debounced refresh to prevent excessive API calls
+        const debouncedRefresh = () => {
+            if (refreshTimeout) clearTimeout(refreshTimeout);
+            refreshTimeout = setTimeout(() => {
+                if (isConnected && activeClientId) {
+                    Promise.all([refreshBalance(), refreshPositions(), refreshEarn()]);
+                }
+                Promise.all([refreshWebhooks(), refreshTracked()]);
+            }, 1000);
+        };
+
+        // Tab switching - optimized
+        function switchTab(tab) {
+            const contents = document.querySelectorAll('.tab-content');
+            const tabs = document.querySelectorAll('.nav-tab');
+            
+            contents.forEach(t => t.classList.remove('active'));
+            tabs.forEach(t => t.classList.remove('active'));
+            
+            show(tab);
+            event.target.classList.add('active');
+            
+            if (tab === 'webhooks') refreshWebhooks();
+            else if (tab === 'wallet') refreshTracked();
+        }
+
+        // Connect to Binance – sets activeClientId
+        async function connect() {
+            status('Connecting...');
+            const data = await api('/api/connect', { method: 'POST' });
+            if (data.success) {
+                activeClientId = data.client_id; // Store client ID globally
+                isConnected = true;
+                $('status').innerHTML = '<strong style="color: #3fb950;">✅ Connected (LIVE)</strong>';
+                refreshBalance();
+                refreshPositions(); 
+                refreshEarn();
+                status('Connected to Binance LIVE API');
+            } else {
+                status('Connection failed: ' + (data.error || 'Unknown error'));
+            }
+        }
+
+        // API functions that use activeClientId
+        async function refresh() {
+            const data = await api('/health');
+            $('status').innerHTML = `Status: ${data.status} | API: ${data.api_configured ? '✅' : '❌'} | Tracked: ${data.tracked_positions}`;
+            $('webhooks').textContent = data.webhook_count;
+            $('tracked').textContent = data.tracked_positions;
+            status('Health check completed');
+        }
+
+        async function refreshBalance() {
+            if (!activeClientId) return;
+            const data = await api(`/api/balance/${activeClientId}`);
+            if (data.error) {
+                $('balance').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
+            } else {
+                const s = data.account_summary;
+                $('balance').innerHTML = `
+                    <div class="grid-4">
+                        <div class="metric"><div class="metric-value">$${s.total_wallet_balance.toFixed(2)}</div><div class="metric-label">Total</div></div>
+                        <div class="metric"><div class="metric-value">$${s.available_balance.toFixed(2)}</div><div class="metric-label">Available</div></div>
+                        <div class="metric"><div class="metric-value ${s.total_unrealized_pnl >= 0 ? 'positive' : 'negative'}">$${s.total_unrealized_pnl.toFixed(2)}</div><div class="metric-label">P&L</div></div>
+                        <div class="metric"><div class="metric-value">${s.can_trade ? '✅' : '❌'}</div><div class="metric-label">Trade</div></div>
+                    </div>`;
+            }
+        }
+
+        async function refreshPositions() {
+            if (!activeClientId) return;
+            const data = await api(`/api/positions/${activeClientId}`);
+            if (data.error || !data.positions.length) {
+                $('positions').innerHTML = '<p>No open positions</p>';
+            } else {
+                $('positions').innerHTML = data.positions.map(p => `
+                    <div class="item">
+                        <strong>${p.symbol} ${p.position_side}</strong>
+                        <small>Amount: ${p.position_amount} | Entry: ${p.entry_price.toFixed(4)}</small>
+                        <span class="${p.unrealized_pnl >= 0 ? 'positive' : 'negative'}">${p.unrealized_pnl.toFixed(2)}</span>
+                    </div>`).join('');
+            }
+        }
+
+        async function refreshEarn() {
+            if (!activeClientId) return;
+            status('Loading earn positions...');
+            const data = await api(`/api/earn/${activeClientId}`);
+            
+            if (data.error) {
+                $('earnPositions').innerHTML = `<p style="color: var(--danger);">Error: ${data.error}</p>`;
+                $('earnSummary').style.display = 'none';
+                return;
+            }
+
+            // Show placeholder message for now
+            $('earnPositions').innerHTML = '<p>💎 Earn functionality not implemented yet</p>';
+            $('earnSummary').style.display = 'none';
+            status('Earn endpoint connected (placeholder)');
+        }
+
+        async function refreshTracked() {
+            const data = await api('/api/tracked-positions');
+            if (data.success && data.tracked_positions.length) {
+                $('trackedPositions').innerHTML = data.tracked_positions.map(p => `
+                    <div class="item">
+                        <strong>${p.symbol} ${p.side}</strong>
+                        <small>Strategy: ${p.strategy_id} | Qty: ${p.quantity} | Entry: $${p.entry_price.toFixed(4)} | Age: ${p.age_minutes}m</small>
+                    </div>`).join('');
+            } else {
+                $('trackedPositions').innerHTML = '<p>No tracked positions</p>';
+            }
+            $('tracked').textContent = data.total_positions || 0;
+        }
+
+        async function loadStrategies() {
+            strategies = await api('/api/strategies');
+            $('strategies').textContent = strategies.length;
+            $('signals').textContent = strategies.reduce((sum, s) => sum + s.total_signals, 0);
+            
+            $('strategiesList').innerHTML = strategies.length ? strategies.map(s => `
+                <div class="item">
+                    <h4>${s.name}</h4>
+                    <p>${s.description || 'No description'}</p>
+                    <small>ID: ${s.id} | Signals: ${s.total_signals}</small>
+                    <div style="margin-top: 10px;">
+                        <code style="font-size: 0.7em; word-break: break-all;">${location.origin}/webhook/tradingview/strategy/${s.id}</code>
+                        <button class="btn" onclick="copyURL(${s.id})" style="font-size: 12px; padding: 4px 8px; margin-top: 5px;">📋 Copy</button>
+                    </div>
+                </div>`).join('') : '<p>No strategies yet</p>';
+        }
+
+        async function createStrategy() {
+            const name = $('strategyName').value;
+            if (!name) return status('Enter strategy name');
+            
+            const result = await api('/api/strategies', {
+                method: 'POST',
+                body: JSON.stringify({ name, description: $('strategyDesc').value })
+            });
+            
+            if (result.success) {
+                $('strategyName').value = '';
+                $('strategyDesc').value = '';
+                loadStrategies();
+                status(`Strategy "${name}" created! ID: ${result.strategy_id}`);
+            } else {
+                status('Error: ' + result.error);
+            }
+        }
+
+        async function refreshWebhooks() {
+            webhookData = await api('/api/webhooks/activity');
+            $('totalWebhooks').textContent = webhookData.length;
+            $('lastWebhook').textContent = webhookData.length ? new Date(webhookData[0].timestamp).toLocaleTimeString() : 'Never';
+            
+            // Live feed
+            $('liveFeed').innerHTML = webhookData.slice(0, 5).map(w => `
+                <div class="feed-item">
+                    <strong>${new Date(w.timestamp).toLocaleTimeString()} - ${w.strategy_name}</strong>
+                    <div style="font-size: 0.8em;">Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Price: $${w.parsed_data.price}</div>
+                </div>`).join('') || '<p>No recent activity</p>';
+            
+            // Activity list
+            $('activityList').innerHTML = webhookData.slice(0, 10).map(w => `
+                <div class="alert alert-success" style="margin: 5px 0; padding: 8px;">
+                    <strong>${w.strategy_name}</strong> - ${new Date(w.timestamp).toLocaleString()}<br>
+                    <small>Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Qty: ${w.parsed_data.quantity} | Price: $${w.parsed_data.price}</small>
+                </div>`).join('') || '<p>No webhook activity</p>';
+        }
+
+        async function testParsing() {
+            const message = $('testMessage').value;
+            if (!message) return status('Enter test message');
+            
+            const result = await api('/webhook/debug-parse', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: message
+            });
+            
+            $('parseResult').innerHTML = `
+                <div class="help" style="margin-top: 10px;">
+                    <h5>🔍 Parsing Results</h5>
+                    <p><strong>Action:</strong> ${result.parsed_result.action}</p>
+                    <p><strong>Symbol:</strong> ${result.parsed_result.symbol}</p>
+                    <p><strong>Quantity:</strong> ${result.parsed_result.quantity}</p>
+                    <p><strong>Price:</strong> Will fetch from Binance API</p>
+                </div>`;
+        }
+
+        function copyURL(id) {
+            const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
+            navigator.clipboard.writeText(url);
+            status(`Webhook URL copied for strategy ${id}!`);
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refresh();
+            loadStrategies();
+            refreshWebhooks();
+            status('Efficient Trading Platform loaded');
+            
+            // Optimized auto-refresh with debouncing (reduces API calls)
+            setInterval(debouncedRefresh, 30000);
+        });
+    </script>
 </body>
 </html>
