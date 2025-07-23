@@ -30,15 +30,16 @@
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
         .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
         .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
-        .card h3 { margin-bottom: 15px; }
+        .card h3 { margin-bottom: 15px; color: var(--color-1); }
+        .card h4 { margin-bottom: 12px; color: var(--color-1); }
         
         .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: var(--text); }
         .form-group input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-dark); color: var(--text); }
         .form-group input:focus { outline: none; border-color: var(--color-1); box-shadow: 0 0 0 2px rgba(36, 76, 72, 0.3); }
         
         .alert { padding: 12px; border-radius: 6px; margin: 10px 0; }
-        .alert-success { background: rgba(36, 76, 72, 0.1); border: 1px solid var(--color-1); color: #3fb950; }
+        .alert-success { background: rgba(36, 76, 72, 0.1); border: 1px solid var(--color-1); color: var(--color-1); }
         .alert-danger { background: rgba(150, 44, 47, 0.1); border: 1px solid var(--color-5); color: var(--color-5); }
         .alert-info { background: rgba(24, 52, 49, 0.1); border: 1px solid var(--color-2); color: #58a6ff; }
         
@@ -51,7 +52,7 @@
         
         .nav-tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
         .nav-tab { padding: 12px 20px; cursor: pointer; border: none; background: none; font-size: 14px; color: var(--text-muted); border-bottom: 3px solid transparent; font-weight: 500; }
-        .nav-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+        .nav-tab.active { color: var(--color-1); border-bottom-color: var(--color-1); }
         .nav-tab:hover { color: var(--text); }
         
         .tab-content { display: none; }
@@ -64,7 +65,7 @@
         .status-bar { position: fixed; bottom: 20px; right: 20px; background: var(--color-3); color: white; padding: 10px 15px; border-radius: 6px; font-size: 14px; max-width: 400px; z-index: 1000; }
         .help { background: var(--bg-dark); border: 1px solid var(--border); padding: 15px; border-radius: 6px; margin: 10px 0; font-size: 0.9em; }
         .help h5 { color: var(--color-1); margin-bottom: 8px; }
-        .help code { background: var(--bg-card); padding: 2px 6px; border-radius: 3px; }
+        .help code { background: var(--bg-card); padding: 2px 6px; border-radius: 3px; color: var(--color-4); font-weight: bold; }
     </style>
 </head>
 <body>
@@ -76,7 +77,6 @@
 
         <div class="nav-tabs">
             <button class="nav-tab active" onclick="switchTab('wallet')">💼 Wallet</button>
-            <button class="nav-tab" onclick="switchTab('loans')">🏦 Loans</button>
             <button class="nav-tab" onclick="switchTab('strategies')">🎯 Strategies</button>
             <button class="nav-tab" onclick="switchTab('webhooks')">🔌 Webhooks</button>
             <button class="nav-tab" onclick="switchTab('rebalancing')">⚖️ Rebalancing</button>
@@ -133,55 +133,6 @@
             </div>
         </div>
 
-        <!-- Loans Tab -->
-        <div id="loans" class="tab-content">
-            <div class="card">
-                <h3>🏦 Binance Loans Overview</h3>
-                <div class="grid">
-                    <div class="card">
-                        <h4>📊 Loan Summary</h4>
-                        <div id="loanSummary">Loading...</div>
-                        <button class="btn" onclick="refreshLoanSummary()">🔄 Refresh Summary</button>
-                    </div>
-                    
-                    <div class="card">
-                        <h4>⚡ Quick Actions</h4>
-                        <button class="btn" onclick="refreshAllLoans()">🔄 Refresh All Data</button>
-                        <button class="btn info" onclick="showRawLoanData()">📊 Raw Data</button>
-                        <button class="btn info" onclick="exportLoanData()">📥 Export Data</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h3>🏃‍♂️ Active Loan Positions</h3>
-                <div id="activeLoanPositions">Connect to API to view loan positions</div>
-                <button class="btn" onclick="refreshActiveLoans()">🔄 Refresh Positions</button>
-            </div>
-
-            <div class="card">
-                <h3>📈 Loan History</h3>
-                <div class="grid-4" style="margin-bottom: 15px;">
-                    <button class="btn info" onclick="refreshLoanHistory(7)">📅 Last 7 Days</button>
-                    <button class="btn info" onclick="refreshLoanHistory(30)">📅 Last 30 Days</button>
-                    <button class="btn info" onclick="refreshLoanHistory(90)">📅 Last 90 Days</button>
-                    <button class="btn info" onclick="showLoanIncome()">💰 Income Data</button>
-                </div>
-                <div id="loanHistory">Click a button above to load history</div>
-            </div>
-
-            <div class="card">
-                <h3>💎 VIP Loans</h3>
-                <div id="vipLoans">Loading VIP loan data...</div>
-                <button class="btn" onclick="refreshVipLoans()">💎 Refresh VIP</button>
-            </div>
-
-            <div class="card" id="rawLoanDataCard" style="display: none;">
-                <h3>🔍 Raw Loan Data (Debug)</h3>
-                <div id="rawLoanData" style="max-height: 400px; overflow-y: auto; font-size: 0.8em; background: var(--bg-dark); padding: 10px; border-radius: 6px;"></div>
-            </div>
-        </div>
-
         <!-- Strategies Tab -->
         <div id="strategies" class="tab-content">
             <div class="grid">
@@ -217,7 +168,7 @@
             <div class="card">
                 <h3>🔌 Webhook Activity</h3>
                 <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                    <span class="badge">🟢 MONITORING</span>
+                    <span class="badge" style="background: var(--color-1);">🟢 MONITORING</span>
                     <button class="btn" onclick="refreshWebhooks()">🔄 Refresh</button>
                 </div>
 
@@ -295,7 +246,6 @@
                     <div id="rebalanceActions">Check LTV status first</div>
                     <button class="btn danger" onclick="performRebalance()">⚖️ Execute Rebalance</button>
                     <button class="btn info" onclick="calculateRebalance()">🧮 Calculate Actions</button>
-                    <button class="btn info" onclick="testAPI()">🧪 Test API</button>
                 </div>
                 
                 <div class="card">
@@ -334,12 +284,6 @@
             
             if (tab === 'webhooks') refreshWebhooks();
             else if (tab === 'rebalancing') refreshLTVStatus();
-            else if (tab === 'loans') {
-                if (activeClientId) {
-                    refreshLoanSummary();
-                    refreshActiveLoans();
-                }
-            }
         }
 
         // Health check
@@ -347,11 +291,16 @@
             const data = await api('/health');
             document.getElementById('webhooks').textContent = data.webhook_count || 0;
             document.getElementById('tracked').textContent = data.tracked_positions || 0;
+            document.getElementById('signals').textContent = data.strategies_count || 0;
         }
 
         // Rebalancing functions
         async function refreshLTVStatus() {
-            if (!activeClientId) return;
+            if (!activeClientId) {
+                document.getElementById('ltvStatus').innerHTML = '<p style="color: #8b949e;">Connect to API first</p>';
+                return;
+            }
+            
             const data = await api(`/api/ltv-status/${activeClientId}`);
             if (data.error) {
                 document.getElementById('ltvStatus').innerHTML = `<p style="color: var(--color-5);">Error: ${data.error}</p>`;
@@ -401,7 +350,7 @@
                 <h5>Recommended Actions:</h5>
                 ${data.actions.map(action => `
                     <div class="item">
-                        <strong>${action.action_type.toUpperCase()}</strong> ${action.amount.toFixed(6)} ${action.asset}
+                        <strong style="color: var(--color-1);">${action.action_type.toUpperCase()}</strong> ${action.amount.toFixed(6)} ${action.asset}
                         ${action.price ? `<br><small>Price: $${action.price.toFixed(4)}</small>` : ''}
                     </div>
                 `).join('')}
@@ -412,13 +361,13 @@
             if (!activeClientId) return;
             if (!confirm('Are you sure you want to execute rebalancing? This will make real trades.')) return;
             
-            const data = await api(`/api/perform-rebalance/${activeClientId}`, { method: 'POST' });
+            const data = await api(`/api/perform-rebalance/${activeClientId}`, 'POST');
             if (data.error) {
-                alert('Rebalancing failed: ' + data.error);
+                status('Rebalancing failed: ' + data.error);
                 return;
             }
             
-            alert(`Rebalancing completed! LTV changed from ${data.before_ltv.toFixed(2)}% to ${data.after_ltv.toFixed(2)}%`);
+            status(`Rebalancing completed! LTV changed from ${data.before_ltv.toFixed(2)}% to ${data.after_ltv.toFixed(2)}%`);
             refreshLTVStatus();
             refreshBalance();
         }
@@ -427,26 +376,16 @@
             const targetLTV = document.getElementById('targetLTV').value;
             const threshold = document.getElementById('rebalanceThreshold').value;
             
-            const data = await api('/api/rebalance-settings', {
-                method: 'POST',
-                body: JSON.stringify({
-                    target_ltv: parseFloat(targetLTV),
-                    rebalance_threshold: parseFloat(threshold)
-                })
+            const data = await api('/api/rebalance-settings', 'POST', {
+                target_ltv: parseFloat(targetLTV),
+                rebalance_threshold: parseFloat(threshold)
             });
             
             if (data.success) {
                 status('Rebalancing settings updated');
             } else {
-                alert('Failed to update settings: ' + data.error);
+                status('Failed to update settings: ' + data.error);
             }
-        }
-
-        // Copy URL helper
-        function copyURL(id) {
-            const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
-            navigator.clipboard.writeText(url);
-            status(`Webhook URL copied for strategy ${id}!`);
         }
     </script>
 </body>

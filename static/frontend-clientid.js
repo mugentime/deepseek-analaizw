@@ -8,11 +8,16 @@ let activeClientId = null;
 //-------------------------------------------------------------
 async function api(url, method = 'GET', body = null) {
   try {
-    const res = await fetch(url, {
+    const options = {
       method,
-      headers: {'Content-Type': 'application/json'},
-      body: body ? JSON.stringify(body) : null
-    });
+      headers: {'Content-Type': 'application/json'}
+    };
+    
+    if (body) {
+      options.body = JSON.stringify(body);
+    }
+    
+    const res = await fetch(url, options);
     return await res.json();
   } catch (err) {
     console.error('API error', err);
@@ -27,50 +32,13 @@ async function connect() {
   const data = await api('/api/connect', 'POST');
   if (data.success) {
     activeClientId = data.client_id; // "live_client"
-    document.getElementById('status').innerHTML = '<strong style="color: #3fb950;">✅ Connected (LIVE)</strong>';
+    document.getElementById('status').innerHTML = '<strong style="color: #244c48;">✅ Connected (LIVE)</strong>';
     refreshAll();
+    status('Connected to Binance API');
   } else {
-    alert('Failed to connect: ' + (data.error || 'Unknown error'));
+    document.getElementById('status').innerHTML = '<strong style="color: #962c2f;">❌ Connection Failed</strong>';
+    status('Connection failed: ' + (data.error || 'Unknown error'));
   }
-}
-
-//-------------------------------------------------------------
-// Status bar helper
-//-------------------------------------------------------------
-function status(message) {
-  const statusBar = document.getElementById('statusBar');
-  if (statusBar) {
-    statusBar.textContent = message;
-    statusBar.style.background = 'var(--color-1)';
-    setTimeout(() => {
-      statusBar.style.background = 'var(--color-3)';
-    }, 3000);
-  }
-}
-
-//-------------------------------------------------------------
-// Check API configuration
-//-------------------------------------------------------------
-async function checkConfig() {
-  const config = await api('/api/debug/config');
-  const configDiv = document.getElementById('configDebug');
-  
-  configDiv.innerHTML = `
-    <h5>🔧 API Configuration Debug</h5>
-    <p><strong>API Key Set:</strong> ${config.binance_api_key_set ? '✅' : '❌'}</p>
-    <p><strong>Secret Key Set:</strong> ${config.binance_secret_key_set ? '✅' : '❌'}</p>
-    <p><strong>API Key Length:</strong> ${config.api_key_length}</p>
-    <p><strong>Secret Key Length:</strong> ${config.secret_key_length}</p>
-    <p><strong>API Key Preview:</strong> ${config.api_key_preview}</p>
-    <p><strong>Secret Key Preview:</strong> ${config.secret_key_preview}</p>
-    <div style="margin-top: 10px;">
-      <strong>Environment Variables:</strong><br>
-      BINANCE_API_KEY: ${config.env_vars_available.BINANCE_API_KEY ? '✅' : '❌'}<br>
-      BINANCE_SECRET_KEY: ${config.env_vars_available.BINANCE_SECRET_KEY ? '✅' : '❌'}
-    </div>
-  `;
-  
-  configDiv.style.display = configDiv.style.display === 'none' ? 'block' : 'none';
 }
 
 //-------------------------------------------------------------
@@ -86,12 +54,21 @@ const formatAPY = (apy) => {
 
 const formatAmount = (amount) => {
   const amtValue = parseFloat(amount) || 0;
-  return `<span style="color: #58a6ff; font-weight: bold;">${amtValue.toFixed(4)}</span>`;
+  return `<span style="color: #58a6ff; font-weight: bold;">${amtValue.toFixed(6)}</span>`;
 };
 
 const formatDailyRewards = (rewards) => {
   const rewardValue = parseFloat(rewards) || 0;
   return `<span style="color: #9c4d30; font-weight: bold;">$${rewardValue.toFixed(4)}</span>`;
+};
+
+const formatTimestamp = (timestamp) => {
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString();
+  } catch {
+    return 'Unknown';
+  }
 };
 
 //-------------------------------------------------------------
@@ -100,7 +77,11 @@ const formatDailyRewards = (rewards) => {
 async function refreshBalance() {
   if (!activeClientId) return;
   const bal = await api(`/api/balance/${activeClientId}`);
-  if (bal.error) return console.warn(bal.error);
+  if (bal.error) {
+    console.warn(bal.error);
+    document.getElementById('wallet-balance').innerHTML = `<p style="color: #962c2f;">Error: ${bal.error}</p>`;
+    return;
+  }
   
   const s = bal.account_summary;
   document.getElementById('wallet-balance').innerHTML = `
@@ -124,7 +105,11 @@ async function refreshBalance() {
 async function refreshPositions() {
   if (!activeClientId) return;
   const pos = await api(`/api/positions/${activeClientId}`);
-  if (pos.error) return console.warn(pos.error);
+  if (pos.error) {
+    console.warn(pos.error);
+    document.getElementById('positions-list').innerHTML = `<p style="color: #962c2f;">Error: ${pos.error}</p>`;
+    return;
+  }
   
   if (!pos.positions || pos.positions.length === 0) {
     document.getElementById('positions-list').innerHTML = '<p style="color: #8b949e;">No open futures positions</p>';
@@ -148,7 +133,12 @@ async function refreshPositions() {
 async function refreshEarn() {
   if (!activeClientId) return;
   const earn = await api(`/api/earn/${activeClientId}`);
-  if (earn.error) return console.warn(earn.error);
+  if (earn.error) {
+    console.warn(earn.error);
+    document.getElementById('earn-summary').innerHTML = `<p style="color: #962c2f;">Error: ${earn.error}</p>`;
+    document.getElementById('earn-positions').innerHTML = '';
+    return;
+  }
   
   if (earn.success && earn.summary && earn.summary.total_positions > 0) {
     const summary = earn.summary;
@@ -207,24 +197,24 @@ async function refreshEarn() {
 
 async function refreshTracked() {
   const data = await api('/api/tracked-positions');
-  if (data.error) return console.warn(data.error);
+  if (data.error) {
+    document.getElementById('trackedPositions').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
+    return;
+  }
   
-  const positions = data.tracked_positions || [];
-  document.getElementById('tracked').textContent = positions.length;
-  
-  if (positions.length === 0) {
+  if (!data.tracked_positions || data.tracked_positions.length === 0) {
     document.getElementById('trackedPositions').innerHTML = '<p style="color: #8b949e;">No tracked positions</p>';
     return;
   }
   
-  document.getElementById('trackedPositions').innerHTML = positions.map(pos => `
-    <div style="background: #0d1117; padding: 10px; margin: 8px 0; border-radius: 6px; border: 1px solid #30363d;">
+  document.getElementById('trackedPositions').innerHTML = data.tracked_positions.map(pos => `
+    <div style="background: #0d1117; padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #30363d;">
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <strong style="color: #f0f6fc;">${pos.symbol} ${pos.side}</strong>
-        <span style="color: #8b949e; font-size: 0.9em;">${pos.age_minutes}m ago</span>
+        <span style="color: #8b949e; font-size: 0.8em;">${pos.age_minutes}m ago</span>
       </div>
-      <div style="font-size: 0.9em; color: #8b949e; margin-top: 5px;">
-        Qty: ${pos.quantity} | Entry: $${pos.entry_price.toFixed(4)} | Strategy: ${pos.strategy_id}
+      <div style="font-size: 0.9em; color: #8b949e; margin-top: 3px;">
+        Qty: ${pos.quantity} | Entry: $${pos.entry_price.toFixed(4)} | Strategy: ${pos.strategy_name || pos.strategy_id}
       </div>
     </div>
   `).join('');
@@ -232,9 +222,12 @@ async function refreshTracked() {
 
 async function loadStrategies() {
   const data = await api('/api/strategies');
-  const strategies = Array.isArray(data) ? data : [];
+  if (data.error) {
+    document.getElementById('strategiesList').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
+    return;
+  }
   
-  document.getElementById('strategies').textContent = strategies.length;
+  const strategies = data.strategies || [];
   
   if (strategies.length === 0) {
     document.getElementById('strategiesList').innerHTML = '<p style="color: #8b949e;">No strategies created yet</p>';
@@ -247,21 +240,88 @@ async function loadStrategies() {
         <strong style="color: #f0f6fc;">${strategy.name}</strong>
         <span style="color: #244c48; font-weight: bold;">${strategy.total_signals} signals</span>
       </div>
-      <p style="color: #8b949e; font-size: 0.9em; margin-bottom: 8px;">${strategy.description || 'No description'}</p>
-      <div style="font-family: monospace; font-size: 0.8em; color: #58a6ff; background: #21262d; padding: 8px; border-radius: 4px; word-break: break-all;">
-        ${location.origin}/webhook/tradingview/strategy/${strategy.id}
+      ${strategy.description ? `<p style="color: #8b949e; font-size: 0.9em; margin-bottom: 8px;">${strategy.description}</p>` : ''}
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <button onclick="copyURL(${strategy.id})" style="background: #244c48; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; cursor: pointer;">📋 Copy URL</button>
+        <span style="color: #8b949e; font-size: 0.8em;">ID: ${strategy.id}</span>
       </div>
-      <button class="btn" onclick="copyURL(${strategy.id})" style="margin-top: 8px; font-size: 0.8em;">📋 Copy URL</button>
+    </div>
+  `).join('');
+  
+  // Update strategies count
+  document.getElementById('strategies').textContent = strategies.length;
+}
+
+async function refreshWebhooks() {
+  const data = await api('/api/webhooks/activity');
+  if (data.error) {
+    document.getElementById('activityList').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
+    return;
+  }
+  
+  const activities = data.activity || [];
+  
+  // Update stats
+  document.getElementById('totalWebhooks').textContent = data.total_count || 0;
+  const successCount = activities.filter(a => a.success).length;
+  const failedCount = activities.filter(a => !a.success).length;
+  document.getElementById('successTrades').textContent = successCount;
+  document.getElementById('failedWebhooks').textContent = failedCount;
+  
+  const lastActivity = activities[0];
+  document.getElementById('lastWebhook').textContent = lastActivity ? formatTimestamp(lastActivity.timestamp) : 'Never';
+  
+  // Update activity list
+  if (activities.length === 0) {
+    document.getElementById('activityList').innerHTML = '<p style="color: #8b949e;">No webhook activity yet</p>';
+    document.getElementById('liveFeed').innerHTML = 'Waiting for signals...';
+    return;
+  }
+  
+  // Live feed (last 5 activities)
+  const recentActivities = activities.slice(0, 5);
+  document.getElementById('liveFeed').innerHTML = recentActivities.map(activity => `
+    <div class="feed-item" style="border-left-color: ${activity.success ? '#244c48' : '#962c2f'};">
+      <div style="font-size: 0.8em; color: #8b949e;">${formatTimestamp(activity.timestamp)} - ${activity.strategy_name || `Strategy ${activity.strategy_id}`}</div>
+      <div style="color: ${activity.success ? '#244c48' : '#962c2f'}; font-weight: bold;">
+        ${activity.success ? '✅' : '❌'} ${activity.raw_message || activity.error}
+      </div>
+    </div>
+  `).join('');
+  
+  // Full activity list
+  document.getElementById('activityList').innerHTML = activities.map(activity => `
+    <div style="background: #0d1117; padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #30363d; border-left: 3px solid ${activity.success ? '#244c48' : '#962c2f'};">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+        <span style="color: ${activity.success ? '#244c48' : '#962c2f'}; font-weight: bold;">
+          ${activity.success ? '✅' : '❌'} ${activity.strategy_name || `Strategy ${activity.strategy_id}`}
+        </span>
+        <span style="color: #8b949e; font-size: 0.8em;">${formatTimestamp(activity.timestamp)}</span>
+      </div>
+      <div style="font-family: monospace; font-size: 0.9em; color: #f0f6fc; margin-bottom: 5px;">
+        ${activity.raw_message || 'No message'}
+      </div>
+      ${activity.success && activity.parsed_data ? `
+        <div style="font-size: 0.8em; color: #8b949e;">
+          Action: ${activity.parsed_data.action} | Symbol: ${activity.parsed_data.symbol} | 
+          ${activity.parsed_data.quantity ? `Qty: ${activity.parsed_data.quantity} | ` : ''}
+          Price: $${activity.parsed_data.price ? activity.parsed_data.price.toFixed(4) : '0.0000'}
+        </div>
+      ` : ''}
+      ${!activity.success && activity.error ? `
+        <div style="color: #962c2f; font-size: 0.8em;">Error: ${activity.error}</div>
+      ` : ''}
     </div>
   `).join('');
 }
 
+// Strategy management
 async function createStrategy() {
   const name = document.getElementById('strategyName').value.trim();
   const description = document.getElementById('strategyDesc').value.trim();
   
   if (!name) {
-    alert('Please enter a strategy name');
+    status('Please enter a strategy name');
     return;
   }
   
@@ -271,106 +331,88 @@ async function createStrategy() {
   });
   
   if (data.success) {
-    status(`Strategy "${name}" created with ID ${data.strategy_id}`);
     document.getElementById('strategyName').value = '';
     document.getElementById('strategyDesc').value = '';
+    status(`Strategy "${name}" created with ID ${data.strategy_id}`);
     loadStrategies();
   } else {
-    alert('Failed to create strategy: ' + (data.error || 'Unknown error'));
+    status('Failed to create strategy: ' + (data.error || 'Unknown error'));
   }
 }
 
-async function refreshWebhooks() {
-  const data = await api('/api/webhooks/activity');
-  const webhooks = Array.isArray(data) ? data : [];
-  
-  document.getElementById('totalWebhooks').textContent = webhooks.length;
-  document.getElementById('successTrades').textContent = webhooks.filter(w => w.parsed_data).length;
-  document.getElementById('failedWebhooks').textContent = webhooks.filter(w => !w.parsed_data).length;
-  
-  if (webhooks.length > 0) {
-    const lastWebhook = new Date(webhooks[0].timestamp);
-    document.getElementById('lastWebhook').textContent = lastWebhook.toLocaleTimeString();
-    
-    // Update live feed (last 5 webhooks)
-    const recentWebhooks = webhooks.slice(0, 5);
-    document.getElementById('liveFeed').innerHTML = recentWebhooks.map(webhook => `
-      <div class="feed-item">
-        <strong>${webhook.strategy_name}</strong> - ${webhook.parsed_data ? webhook.parsed_data.action : 'PARSE ERROR'} 
-        ${webhook.parsed_data ? webhook.parsed_data.symbol : ''} 
-        <span style="float: right; color: #8b949e; font-size: 0.8em;">
-          ${new Date(webhook.timestamp).toLocaleTimeString()}
-        </span>
-        <br><small style="color: #8b949e;">${webhook.raw_message}</small>
-      </div>
-    `).join('') || '<p style="color: #8b949e;">No recent activity</p>';
-    
-    // Update activity list (last 10 webhooks)
-    document.getElementById('activityList').innerHTML = webhooks.slice(0, 10).map(webhook => `
-      <div class="item">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <strong>${webhook.strategy_name} (ID: ${webhook.strategy_id})</strong>
-          <span style="color: #8b949e; font-size: 0.8em;">${new Date(webhook.timestamp).toLocaleString()}</span>
-        </div>
-        <div style="background: #21262d; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
-          ${webhook.raw_message}
-        </div>
-        ${webhook.parsed_data ? `
-          <div style="margin-top: 5px; font-size: 0.9em;">
-            <span style="color: #244c48;">Action:</span> ${webhook.parsed_data.action} | 
-            <span style="color: #244c48;">Symbol:</span> ${webhook.parsed_data.symbol} | 
-            <span style="color: #244c48;">Qty:</span> ${webhook.parsed_data.quantity} | 
-            <span style="color: #244c48;">Price:</span> $${webhook.parsed_data.price.toFixed(4)}
-          </div>
-        ` : '<div style="color: #962c2f; font-size: 0.9em;">⚠️ Failed to parse message</div>'}
-      </div>
-    `).join('') || '<p style="color: #8b949e;">No webhook activity yet</p>';
-  } else {
-    document.getElementById('lastWebhook').textContent = 'Never';
-    document.getElementById('liveFeed').innerHTML = '<p style="color: #8b949e;">Waiting for signals...</p>';
-    document.getElementById('activityList').innerHTML = '<p style="color: #8b949e;">No activity yet</p>';
-  }
-}
-
+// Test message parsing
 async function testParsing() {
   const message = document.getElementById('testMessage').value.trim();
   if (!message) {
-    alert('Please enter a test message');
+    status('Please enter a message to test');
     return;
   }
   
   const data = await api('/webhook/debug-parse', 'POST', message);
   
-  const resultDiv = document.getElementById('parseResult');
-  if (data.parsed_result && !data.parsed_result.error) {
-    resultDiv.innerHTML = `
-      <div style="background: #0d1117; border: 1px solid #244c48; padding: 12px; border-radius: 6px; margin-top: 10px;">
-        <h5 style="color: #244c48; margin-bottom: 10px;">✅ Parse Success</h5>
-        <p><strong>Action:</strong> ${data.parsed_result.action}</p>
-        <p><strong>Symbol:</strong> ${data.parsed_result.symbol}</p>
-        <p><strong>Quantity:</strong> ${data.parsed_result.quantity}</p>
+  document.getElementById('parseResult').innerHTML = `
+    <div style="background: #0d1117; padding: 10px; border-radius: 6px; margin-top: 10px; font-family: monospace; font-size: 0.9em;">
+      <div style="color: #8b949e; margin-bottom: 5px;">Raw: "${data.raw_message}"</div>
+      <div style="color: ${data.success ? '#244c48' : '#962c2f'};">
+        Result: ${JSON.stringify(data.parsed_result, null, 2)}
       </div>
-    `;
-  } else {
-    resultDiv.innerHTML = `
-      <div style="background: #0d1117; border: 1px solid #962c2f; padding: 12px; border-radius: 6px; margin-top: 10px;">
-        <h5 style="color: #962c2f; margin-bottom: 10px;">❌ Parse Failed</h5>
-        <p>Unable to parse the message. Check format.</p>
+    </div>
+  `;
+}
+
+// Check API configuration
+async function checkConfig() {
+  const data = await api('/api/debug/config');
+  const configDiv = document.getElementById('configDebug');
+  
+  configDiv.style.display = configDiv.style.display === 'none' ? 'block' : 'none';
+  
+  if (configDiv.style.display === 'block') {
+    configDiv.innerHTML = `
+      <h5 style="color: #244c48; margin-bottom: 10px;">🔧 API Configuration</h5>
+      <div style="display: grid; grid-template-columns: 200px 1fr; gap: 5px; font-size: 0.8em;">
+        <span>API Key Set:</span><span style="color: ${data.binance_api_key_set ? '#244c48' : '#962c2f'};">${data.binance_api_key_set ? '✅ Yes' : '❌ No'}</span>
+        <span>Secret Key Set:</span><span style="color: ${data.binance_secret_key_set ? '#244c48' : '#962c2f'};">${data.binance_secret_key_set ? '✅ Yes' : '❌ No'}</span>
+        <span>API Key Length:</span><span>${data.api_key_length} chars</span>
+        <span>Secret Key Length:</span><span>${data.secret_key_length} chars</span>
+        <span>API Key Preview:</span><span style="font-family: monospace;">${data.api_key_preview}</span>
+        <span>Secret Key Preview:</span><span style="font-family: monospace;">${data.secret_key_preview}</span>
+        <span>Env Vars Available:</span><span>${JSON.stringify(data.env_vars_available)}</span>
       </div>
     `;
   }
 }
 
-// Copy URL helper
+// Copy webhook URL
 function copyURL(id) {
   const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
-  navigator.clipboard.writeText(url);
-  status(`Webhook URL copied for strategy ${id}!`);
+  navigator.clipboard.writeText(url).then(() => {
+    status(`Webhook URL copied for strategy ${id}!`);
+  }).catch(() => {
+    status('Failed to copy URL - please copy manually');
+  });
 }
 
+// Status message helper
+function status(message) {
+  const statusBar = document.getElementById('statusBar');
+  statusBar.textContent = message;
+  statusBar.style.background = '#244c48';
+  
+  setTimeout(() => {
+    statusBar.textContent = 'Efficient Trading Platform - Ready';
+    statusBar.style.background = '#142924';
+  }, 5000);
+}
+
+// Refresh all data
 function refreshAll() {
-  refreshBalance();
-  refreshPositions();
-  refreshEarn();
-  refreshTracked();
+  if (activeClientId) {
+    refreshBalance();
+    refreshPositions();
+    refreshEarn();
+    refreshTracked();
+  }
+  loadStrategies();
+  refreshWebhooks();
 }
