@@ -54,13 +54,6 @@ class RebalancingEngine:
         try:
             margin_account = self.client.get_margin_account()
             
-            if 'error' in margin_account:
-                return LTVStatus(
-                    current_ltv=0, target_ltv=74, ltv_diff=0, needs_rebalance=False,
-                    action_required=None, total_asset_btc=0, total_liability_btc=0,
-                    margin_level=0, recommended_actions=[f"API Error: {margin_account['error']}"]
-                )
-            
             total_asset_btc = float(margin_account.get('totalAssetOfBtc', 0))
             total_liability_btc = float(margin_account.get('totalLiabilityOfBtc', 0))
             margin_level = float(margin_account.get('marginLevel', 0))
@@ -124,9 +117,6 @@ class RebalancingEngine:
         """Get list of borrowed assets with details"""
         try:
             margin_account = self.client.get_margin_account()
-            if 'error' in margin_account:
-                return []
-                
             borrowed_assets = []
             
             for asset_info in margin_account.get('userAssets', []):
@@ -150,9 +140,6 @@ class RebalancingEngine:
         """Get available balances that can be used for repaying debt"""
         try:
             margin_account = self.client.get_margin_account()
-            if 'error' in margin_account:
-                return {}
-                
             available_assets = {}
             
             for asset_info in margin_account.get('userAssets', []):
@@ -275,33 +262,21 @@ class RebalancingEngine:
             try:
                 if action.action_type == 'repay':
                     result = self.client.margin_repay(action.asset, action.amount)
-                    if 'error' in result:
-                        action.success = False
-                        action.error = result['error']
-                    else:
-                        action.success = True
-                        logger.info(f"Successfully repaid {action.amount} {action.asset}")
+                    action.success = True
+                    logger.info(f"Successfully repaid {action.amount} {action.asset}")
                 
                 elif action.action_type == 'borrow':
                     result = self.client.margin_borrow(action.asset, action.amount)
-                    if 'error' in result:
-                        action.success = False
-                        action.error = result['error']
-                    else:
-                        action.success = True
-                        logger.info(f"Successfully borrowed {action.amount} {action.asset}")
+                    action.success = True
+                    logger.info(f"Successfully borrowed {action.amount} {action.asset}")
                 
                 elif action.action_type == 'buy' or action.action_type == 'sell':
                     # For spot trading to rebalance
                     symbol = f"{action.asset}USDT"
                     side = 'BUY' if action.action_type == 'buy' else 'SELL'
                     result = self.client.spot_order(symbol, side, action.amount)
-                    if 'error' in result:
-                        action.success = False
-                        action.error = result['error']
-                    else:
-                        action.success = True
-                        logger.info(f"Successfully executed {action.action_type} {action.amount} {action.asset}")
+                    action.success = True
+                    logger.info(f"Successfully executed {action.action_type} {action.amount} {action.asset}")
                 
                 executed_actions.append(action)
                 
