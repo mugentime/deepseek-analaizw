@@ -6,16 +6,10 @@
     <title>⚡ Efficient Trading Platform</title>
     <style>
         :root {
-            --color-1: #244c48;
-            --color-2: #183431;
-            --color-3: #142924;
-            --color-4: #9c4d30;
-            --color-5: #962c2f;
-            --bg-dark: #0d1117;
-            --bg-card: #21262d;
-            --border: #30363d;
-            --text: #f0f6fc;
-            --text-muted: #8b949e;
+            --color-1: #244c48; --color-2: #183431; --color-3: #142924;
+            --color-4: #9c4d30; --color-5: #962c2f;
+            --bg-dark: #0d1117; --bg-card: #21262d;
+            --border: #30363d; --text: #f0f6fc; --text-muted: #8b949e;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -31,6 +25,7 @@
         .btn { background: var(--color-1); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s; margin: 5px; }
         .btn:hover { background: var(--color-2); transform: translateY(-1px); }
         .btn.danger { background: var(--color-5); }
+        .btn.warning { background: var(--color-4); }
         .btn.info { background: var(--color-2); }
         
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
@@ -47,13 +42,14 @@
         .alert-success { background: rgba(36, 76, 72, 0.1); border: 1px solid var(--color-1); color: #3fb950; }
         .alert-danger { background: rgba(150, 44, 47, 0.1); border: 1px solid var(--color-5); color: var(--color-5); }
         .alert-info { background: rgba(24, 52, 49, 0.1); border: 1px solid var(--color-2); color: #58a6ff; }
+        .alert-warning { background: rgba(156, 77, 48, 0.1); border: 1px solid var(--color-4); color: var(--color-4); }
         
         .metric { text-align: center; padding: 15px; background: var(--bg-dark); border-radius: 8px; border: 1px solid var(--border); }
         .metric-value { font-size: 1.8em; font-weight: bold; color: #58a6ff; margin-bottom: 5px; }
         .metric-label { font-size: 0.9em; color: var(--text-muted); }
-        .positive { color: var(--color-1) !important; }
-        .negative { color: var(--color-5) !important; }
-        .warning { color: var(--color-4) !important; }
+        .positive { color: var(--color-1); }
+        .negative { color: var(--color-5); }
+        .warning { color: var(--color-4); }
         
         .nav-tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
         .nav-tab { padding: 12px 20px; cursor: pointer; border: none; background: none; font-size: 14px; color: var(--text-muted); border-bottom: 3px solid transparent; font-weight: 500; }
@@ -77,7 +73,7 @@
     <div class="container">
         <div class="header">
             <h1>⚡ Efficient Trading Platform <span class="badge">LIVE</span></h1>
-            <p>Streamlined for maximum performance - Wallet + Webhooks + Earn</p>
+            <p>Streamlined for maximum performance - Wallet + Webhooks + Earn + Rebalancing</p>
         </div>
 
         <div class="nav-tabs">
@@ -93,7 +89,7 @@
                 <h3>🔐 API Connection</h3>
                 <p id="status">Checking...</p>
                 <div class="alert alert-danger">⚠️ LIVE TRADING MODE - Real money!</div>
-                <div class="alert alert-success">✅ Real prices + Close signals + Earn functionality</div>
+                <div class="alert alert-success">✅ Real prices + Close signals + Earn + Rebalancing functionality</div>
                 <button class="btn" onclick="connect()">Connect Binance API</button>
                 <button class="btn" onclick="refreshAll()">🔄 Refresh All</button>
                 <button class="btn info" onclick="checkConfig()">🔧 Check Config</button>
@@ -223,40 +219,62 @@
 
         <!-- Rebalancing Tab -->
         <div id="rebalancing" class="tab-content">
+            <div class="alert alert-warning">
+                <h5>⚠️ Margin Trading Rebalancing</h5>
+                <p>This feature manages LTV ratios on Binance Margin accounts. Make sure you have margin trading enabled.</p>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>📊 Current LTV Status</h3>
+                    <div id="ltvStatus">
+                        <p style="color: #8b949e;">Connect API and click refresh to view LTV status</p>
+                    </div>
+                    <button class="btn" onclick="refreshLTVStatus()">🔄 Refresh Status</button>
+                </div>
+                
+                <div class="card">
+                    <h3>⚙️ Rebalancing Settings</h3>
+                    <div class="form-group">
+                        <label>Target LTV (%)</label>
+                        <input id="targetLTV" type="number" value="74" min="0" max="90" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>Rebalance Threshold (%)</label>
+                        <input id="rebalanceThreshold" type="number" value="2" min="0.1" max="10" step="0.1">
+                    </div>
+                    <button class="btn" onclick="updateRebalanceSettings()">💾 Save Settings</button>
+                    <div class="help">
+                        <h5>💡 Settings Explanation</h5>
+                        <p><strong>Target LTV:</strong> Desired loan-to-value ratio (74% is recommended)</p>
+                        <p><strong>Threshold:</strong> Trigger rebalancing when LTV differs by this amount</p>
+                    </div>
+                </div>
+            </div>
+            
             <div class="card">
-                <h3>⚖️ LTV Rebalancing</h3>
-                <div class="grid">
-                    <div class="card">
-                        <h4>📊 Current Status</h4>
-                        <div id="ltvStatus">Loading...</div>
-                        <button class="btn" onclick="refreshLTVStatus()">🔄 Refresh Status</button>
-                    </div>
-                    
-                    <div class="card">
-                        <h4>⚙️ Settings</h4>
-                        <div class="form-group">
-                            <label>Target LTV (%)</label>
-                            <input id="targetLTV" type="number" value="74" min="0" max="90" step="0.1">
-                        </div>
-                        <div class="form-group">
-                            <label>Rebalance Threshold (%)</label>
-                            <input id="rebalanceThreshold" type="number" value="2" min="0.1" max="10" step="0.1">
-                        </div>
-                        <button class="btn" onclick="updateRebalanceSettings()">💾 Save Settings</button>
-                    </div>
+                <h3>🔄 Rebalancing Actions</h3>
+                <div id="rebalanceActions">
+                    <p style="color: #8b949e;">Calculate actions first to see what will be executed</p>
                 </div>
-                
-                <div class="card">
-                    <h4>🔄 Manual Rebalancing</h4>
-                    <div id="rebalanceActions">Check LTV status first</div>
-                    <button class="btn danger" onclick="performRebalance()">⚖️ Execute Rebalance</button>
+                <div style="margin-top: 15px;">
                     <button class="btn info" onclick="calculateRebalance()">🧮 Calculate Actions</button>
+                    <button class="btn danger" onclick="performRebalance()">⚖️ Execute Rebalance</button>
                 </div>
-                
-                <div class="card">
-                    <h4>📈 Rebalance History</h4>
-                    <div id="rebalanceHistory">No history yet</div>
+                <div class="help">
+                    <h5>⚠️ Important Notes</h5>
+                    <p>• Calculate actions first to review what will happen</p>
+                    <p>• Execute rebalance will make real trades with your funds</p>
+                    <p>• Ensure you have sufficient balance for rebalancing operations</p>
                 </div>
+            </div>
+            
+            <div class="card">
+                <h3>📈 Rebalance History</h3>
+                <div id="rebalanceHistory">
+                    <p style="color: #8b949e;">No rebalancing history yet</p>
+                </div>
+                <button class="btn" onclick="refreshRebalanceHistory()">🔄 Refresh History</button>
             </div>
         </div>
     </div>
@@ -298,136 +316,16 @@
             document.getElementById('tracked').textContent = data.tracked_positions || 0;
         }
 
-        // Config debug
-        async function checkConfig() {
-            const configDiv = document.getElementById('configDebug');
-            const data = await api('/api/debug/config');
-            
-            configDiv.innerHTML = `
-                <h5>🔧 API Configuration Debug</h5>
-                <p>API Key Set: ${data.binance_api_key_set ? '✅' : '❌'}</p>
-                <p>Secret Key Set: ${data.binance_secret_key_set ? '✅' : '❌'}</p>
-                <p>API Key Length: ${data.api_key_length}</p>
-                <p>Secret Key Length: ${data.secret_key_length}</p>
-                <p>API Key Preview: ${data.api_key_preview}</p>
-                <p>Secret Key Preview: ${data.secret_key_preview}</p>
-            `;
-            configDiv.style.display = configDiv.style.display === 'none' ? 'block' : 'none';
-        }
-
-        // Strategy management
-        async function loadStrategies() {
-            const data = await api('/api/strategies');
-            const list = document.getElementById('strategiesList');
-            
-            if (data.length === 0) {
-                list.innerHTML = '<p style="color: var(--text-muted);">No strategies created yet</p>';
-                return;
-            }
-            
-            list.innerHTML = data.map(s => `
-                <div class="item">
-                    <strong>${s.name}</strong> - ${s.total_signals} signals
-                    <br><small>${s.description}</small>
-                    <br><button class="btn" onclick="copyURL(${s.id})" style="margin-top: 5px;">📋 Copy Webhook URL</button>
-                </div>
-            `).join('');
-            
-            document.getElementById('strategies').textContent = data.length;
-        }
-
-        async function createStrategy() {
-            const name = document.getElementById('strategyName').value;
-            const desc = document.getElementById('strategyDesc').value;
-            
-            if (!name) {
-                alert('Please enter a strategy name');
-                return;
-            }
-            
-            const data = await api('/api/strategies', 'POST', {name, description: desc});
-            if (data.success) {
-                document.getElementById('strategyName').value = '';
-                document.getElementById('strategyDesc').value = '';
-                loadStrategies();
-                status(`Strategy created with ID ${data.strategy_id}`);
-            } else {
-                alert('Failed to create strategy');
-            }
-        }
-
-        // Webhook management
-        async function refreshWebhooks() {
-            const data = await api('/api/webhooks/activity');
-            const total = data.length;
-            
-            document.getElementById('totalWebhooks').textContent = total;
-            document.getElementById('successTrades').textContent = data.filter(w => w.parsed_data).length;
-            document.getElementById('failedWebhooks').textContent = total - data.filter(w => w.parsed_data).length;
-            document.getElementById('lastWebhook').textContent = total > 0 ? 
-                new Date(data[0].timestamp).toLocaleTimeString() : 'Never';
-            
-            // Update activity list
-            const activityList = document.getElementById('activityList');
-            if (total === 0) {
-                activityList.innerHTML = '<p style="color: var(--text-muted);">No webhook activity yet</p>';
-            } else {
-                activityList.innerHTML = data.slice(0, 10).map(w => `
-                    <div class="feed-item">
-                        <strong>${w.strategy_name}</strong> - ${w.parsed_data.action} ${w.parsed_data.symbol}
-                        <br><small>${new Date(w.timestamp).toLocaleString()}</small>
-                    </div>
-                `).join('');
-            }
-            
-            // Update live feed
-            const liveFeed = document.getElementById('liveFeed');
-            if (total > 0) {
-                liveFeed.innerHTML = data.slice(0, 5).map(w => `
-                    <div class="feed-item">
-                        ${w.parsed_data.action.toUpperCase()} ${w.parsed_data.symbol} - $${w.parsed_data.price.toFixed(2)}
-                    </div>
-                `).join('');
-            }
-        }
-
-        async function testParsing() {
-            const message = document.getElementById('testMessage').value;
-            if (!message) return;
-            
-            const data = await api('/webhook/debug-parse', 'POST', message);
-            document.getElementById('parseResult').innerHTML = `
-                <div class="alert alert-info">
-                    <h5>Parse Result:</h5>
-                    <pre>${JSON.stringify(data, null, 2)}</pre>
-                </div>
-            `;
-        }
-
-        // Tracked positions
-        async function refreshTracked() {
-            const data = await api('/api/tracked-positions');
-            const list = document.getElementById('trackedPositions');
-            
-            if (data.total_positions === 0) {
-                list.innerHTML = '<p style="color: var(--text-muted);">No tracked positions</p>';
-                return;
-            }
-            
-            list.innerHTML = data.tracked_positions.map(p => `
-                <div class="item">
-                    <strong>${p.symbol} ${p.side}</strong> - ${p.quantity}
-                    <br><small>Entry: $${p.entry_price.toFixed(4)} | Age: ${p.age_minutes}min</small>
-                </div>
-            `).join('');
-        }
-
         // Rebalancing functions
         async function refreshLTVStatus() {
-            if (!activeClientId) return;
+            if (!activeClientId) {
+                document.getElementById('ltvStatus').innerHTML = '<p style="color: #962c2f;">Please connect to API first</p>';
+                return;
+            }
+            
             const data = await api(`/api/ltv-status/${activeClientId}`);
             if (data.error) {
-                document.getElementById('ltvStatus').innerHTML = `<p style="color: var(--color-5);">Error: ${data.error}</p>`;
+                document.getElementById('ltvStatus').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
                 return;
             }
             
@@ -451,79 +349,118 @@
                         <div class="metric-label">Rebalance</div>
                     </div>
                 </div>
-                <div style="margin-top: 15px;">
-                    ${status.recommended_actions.map(action => `<p style="font-size: 0.9em; margin: 5px 0;">${action}</p>`).join('')}
+                <div style="margin-top: 15px; background: #0d1117; padding: 10px; border-radius: 6px;">
+                    <h5 style="color: #244c48; margin-bottom: 8px;">Recommendations:</h5>
+                    ${status.recommended_actions.map(action => `<p style="font-size: 0.9em; margin: 5px 0; color: #8b949e;">• ${action}</p>`).join('')}
                 </div>
             `;
         }
 
         async function calculateRebalance() {
-            if (!activeClientId) return;
+            if (!activeClientId) {
+                alert('Please connect to API first');
+                return;
+            }
+            
+            status('Calculating rebalancing actions...');
             const data = await api(`/api/calculate-rebalance/${activeClientId}`);
+            
             if (data.error) {
-                document.getElementById('rebalanceActions').innerHTML = `<p style="color: var(--color-5);">Error: ${data.error}</p>`;
+                document.getElementById('rebalanceActions').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
                 return;
             }
             
             if (data.actions.length === 0) {
-                document.getElementById('rebalanceActions').innerHTML = '<p>No rebalancing actions needed</p>';
+                document.getElementById('rebalanceActions').innerHTML = `
+                    <div class="alert alert-success">
+                        <h5>✅ No Actions Needed</h5>
+                        <p>Your LTV is within the target range. No rebalancing required.</p>
+                    </div>
+                `;
                 return;
             }
             
             document.getElementById('rebalanceActions').innerHTML = `
-                <h5>Recommended Actions:</h5>
+                <div class="alert alert-info">
+                    <h5>📋 Recommended Actions (${data.actions.length})</h5>
+                    <p>Review the actions below before executing:</p>
+                </div>
                 ${data.actions.map(action => `
-                    <div class="item">
-                        <strong>${action.action_type.toUpperCase()}</strong> ${action.amount.toFixed(6)} ${action.asset}
-                        ${action.price ? `<br><small>Price: $${action.price.toFixed(4)}</small>` : ''}
+                    <div class="item" style="border-left: 3px solid ${action.action_type === 'repay' ? '#244c48' : action.action_type === 'borrow' ? '#9c4d30' : '#962c2f'};">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <strong style="color: #f0f6fc;">${action.action_type.toUpperCase()}</strong>
+                            <span style="color: #58a6ff; font-weight: bold;">${action.amount.toFixed(6)} ${action.asset}</span>
+                        </div>
+                        ${action.price ? `<div style="font-size: 0.9em; color: #8b949e; margin-top: 5px;">Estimated Price: $${action.price.toFixed(4)}</div>` : ''}
                     </div>
                 `).join('')}
             `;
+            
+            status('Rebalancing actions calculated');
         }
 
         async function performRebalance() {
-            if (!activeClientId) return;
-            if (!confirm('Are you sure you want to execute rebalancing? This will make real trades.')) return;
-            
-            const data = await api(`/api/perform-rebalance/${activeClientId}`, 'POST');
-            if (data.error) {
-                alert('Rebalancing failed: ' + data.error);
+            if (!activeClientId) {
+                alert('Please connect to API first');
                 return;
             }
             
-            alert(`Rebalancing completed! LTV changed from ${data.before_ltv.toFixed(2)}% to ${data.after_ltv.toFixed(2)}%`);
-            refreshLTVStatus();
-            refreshBalance();
+            if (!confirm('⚠️ Are you sure you want to execute rebalancing?\n\nThis will make real trades with your funds on Binance Margin.')) {
+                return;
+            }
+            
+            status('Executing rebalancing...');
+            const data = await api(`/api/perform-rebalance/${activeClientId}`, 'POST');
+            
+            if (data.error) {
+                alert(`❌ Rebalancing failed:\n${data.error}`);
+                status('Rebalancing failed');
+                return;
+            }
+            
+            if (data.success) {
+                alert(`✅ Rebalancing completed!\n\nLTV changed from ${data.before_ltv.toFixed(2)}% to ${data.after_ltv.toFixed(2)}%\n\nSuccessful actions: ${data.successful_actions}\nFailed actions: ${data.failed_actions}`);
+                status('Rebalancing completed successfully');
+                
+                // Refresh everything
+                refreshLTVStatus();
+                refreshBalance();
+                refreshRebalanceHistory();
+            } else {
+                alert(`⚠️ Rebalancing partially completed:\n${data.message}`);
+                status('Rebalancing partially completed');
+            }
         }
 
         async function updateRebalanceSettings() {
-            const targetLTV = document.getElementById('targetLTV').value;
-            const threshold = document.getElementById('rebalanceThreshold').value;
+            const targetLTV = parseFloat(document.getElementById('targetLTV').value);
+            const threshold = parseFloat(document.getElementById('rebalanceThreshold').value);
+            
+            if (targetLTV < 0 || targetLTV > 90) {
+                alert('Target LTV must be between 0% and 90%');
+                return;
+            }
+            
+            if (threshold < 0.1 || threshold > 10) {
+                alert('Rebalance threshold must be between 0.1% and 10%');
+                return;
+            }
             
             const data = await api('/api/rebalance-settings', 'POST', {
-                target_ltv: parseFloat(targetLTV),
-                rebalance_threshold: parseFloat(threshold)
+                target_ltv: targetLTV,
+                rebalance_threshold: threshold
             });
             
             if (data.success) {
-                status('Rebalancing settings updated');
+                status('✅ Rebalancing settings updated');
             } else {
                 alert('Failed to update settings: ' + data.error);
             }
         }
 
-        // Utility functions
-        function status(msg) {
-            document.getElementById('statusBar').textContent = msg;
-            setTimeout(() => {
-                document.getElementById('statusBar').textContent = 'Efficient Trading Platform - Ready';
-            }, 3000);
-        }
-
-        function copyURL(id) {
-            const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
-            navigator.clipboard.writeText(url);
-            status(`Webhook URL copied for strategy ${id}!`);
+        async function refreshRebalanceHistory() {
+            // This would need to be implemented in the backend
+            document.getElementById('rebalanceHistory').innerHTML = '<p style="color: #8b949e;">Rebalance history feature coming soon</p>';
         }
     </script>
 </body>
