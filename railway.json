@@ -4,8 +4,10 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "gunicorn app:app --bind 0.0.0.0:8080 --workers 1 --timeout 120 --preload",
+    "startCommand": "gunicorn app:app --bind 0.0.0.0:8080 --workers 1 --timeout 120 --preload --access-logfile - --error-logfile -",
     "restartPolicyType": "always",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 10,
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 300
   }
 }
