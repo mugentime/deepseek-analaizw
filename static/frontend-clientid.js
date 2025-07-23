@@ -21,88 +21,56 @@ async function api(url, method = 'GET', body = null) {
 }
 
 //-------------------------------------------------------------
-// Status helper
-//-------------------------------------------------------------
-function status(msg) {
-  document.getElementById('statusBar').textContent = `${new Date().toLocaleTimeString()}: ${msg}`;
-}
-
-//-------------------------------------------------------------
 // Connect to Binance – sets activeClientId
 //-------------------------------------------------------------
 async function connect() {
-  status('Connecting to Binance API...');
   const data = await api('/api/connect', 'POST');
   if (data.success) {
     activeClientId = data.client_id; // "live_client"
     document.getElementById('status').innerHTML = '<strong style="color: #3fb950;">✅ Connected (LIVE)</strong>';
-    document.getElementById('configDebug').style.display = 'none';
     refreshAll();
-    status('Connected to Binance LIVE API - All data loading...');
   } else {
-    document.getElementById('status').innerHTML = `<strong style="color: var(--color-5);">❌ Connection Failed</strong>`;
-    if (data.error && data.error.includes('credentials')) {
-      document.getElementById('status').innerHTML += '<br><small>Click "🔧 Check Config" to verify your API keys</small>';
-    }
-    status('Connection failed: ' + (data.error || 'Unknown error'));
+    alert('Failed to connect: ' + (data.error || 'Unknown error'));
   }
 }
 
 //-------------------------------------------------------------
-// Config check
+// Status bar helper
+//-------------------------------------------------------------
+function status(message) {
+  const statusBar = document.getElementById('statusBar');
+  if (statusBar) {
+    statusBar.textContent = message;
+    statusBar.style.background = 'var(--color-1)';
+    setTimeout(() => {
+      statusBar.style.background = 'var(--color-3)';
+    }, 3000);
+  }
+}
+
+//-------------------------------------------------------------
+// Check API configuration
 //-------------------------------------------------------------
 async function checkConfig() {
-  status('Checking API configuration...');
-  const data = await api('/api/debug/config');
+  const config = await api('/api/debug/config');
+  const configDiv = document.getElementById('configDebug');
   
-  document.getElementById('configDebug').innerHTML = `
-    <h5 style="color: var(--color-1); margin-bottom: 10px;">🔧 API Configuration Status</h5>
-    
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-      <div>
-        <h6 style="color: #58a6ff;">API Key:</h6>
-        <p>Set: <span style="color: ${data.binance_api_key_set ? '#3fb950' : 'var(--color-5)'};">${data.binance_api_key_set ? 'YES' : 'NO'}</span></p>
-        <p>Length: ${data.api_key_length} chars</p>
-        <p>Preview: <code>${data.api_key_preview}</code></p>
-      </div>
-      
-      <div>
-        <h6 style="color: #58a6ff;">Secret Key:</h6>
-        <p>Set: <span style="color: ${data.binance_secret_key_set ? '#3fb950' : 'var(--color-5)'};">${data.binance_secret_key_set ? 'YES' : 'NO'}</span></p>
-        <p>Length: ${data.secret_key_length} chars</p>
-        <p>Preview: <code>${data.secret_key_preview}</code></p>
-      </div>
-    </div>
-    
+  configDiv.innerHTML = `
+    <h5>🔧 API Configuration Debug</h5>
+    <p><strong>API Key Set:</strong> ${config.binance_api_key_set ? '✅' : '❌'}</p>
+    <p><strong>Secret Key Set:</strong> ${config.binance_secret_key_set ? '✅' : '❌'}</p>
+    <p><strong>API Key Length:</strong> ${config.api_key_length}</p>
+    <p><strong>Secret Key Length:</strong> ${config.secret_key_length}</p>
+    <p><strong>API Key Preview:</strong> ${config.api_key_preview}</p>
+    <p><strong>Secret Key Preview:</strong> ${config.secret_key_preview}</p>
     <div style="margin-top: 10px;">
-      <h6 style="color: #58a6ff;">Environment Variables:</h6>
-      <p>BINANCE_API_KEY in env: <span style="color: ${data.env_vars_available.BINANCE_API_KEY ? '#3fb950' : 'var(--color-5)'};">${data.env_vars_available.BINANCE_API_KEY ? 'YES' : 'NO'}</span></p>
-      <p>BINANCE_SECRET_KEY in env: <span style="color: ${data.env_vars_available.BINANCE_SECRET_KEY ? '#3fb950' : 'var(--color-5)'};">${data.env_vars_available.BINANCE_SECRET_KEY ? 'YES' : 'NO'}</span></p>
+      <strong>Environment Variables:</strong><br>
+      BINANCE_API_KEY: ${config.env_vars_available.BINANCE_API_KEY ? '✅' : '❌'}<br>
+      BINANCE_SECRET_KEY: ${config.env_vars_available.BINANCE_SECRET_KEY ? '✅' : '❌'}
     </div>
-    
-    ${!data.binance_api_key_set || !data.binance_secret_key_set ? `
-    <div style="margin-top: 15px; padding: 10px; background: rgba(150, 44, 47, 0.1); border: 1px solid var(--color-5); border-radius: 4px;">
-      <h6 style="color: var(--color-5);">❌ Configuration Issue!</h6>
-      <p style="font-size: 0.8em;">Your Binance API credentials are not properly set. Please add them to your Railway environment variables:</p>
-      <p style="font-size: 0.8em;">1. Go to Railway Dashboard → Your App → Variables</p>
-      <p style="font-size: 0.8em;">2. Add: BINANCE_API_KEY = your_api_key</p>
-      <p style="font-size: 0.8em;">3. Add: BINANCE_SECRET_KEY = your_secret_key</p>
-      <p style="font-size: 0.8em;">4. Redeploy the application</p>
-    </div>
-    ` : `
-    <div style="margin-top: 15px; padding: 10px; background: rgba(36, 76, 72, 0.1); border: 1px solid var(--color-1); border-radius: 4px;">
-      <h6 style="color: var(--color-1);">✅ Configuration Looks Good!</h6>
-      <p style="font-size: 0.8em;">Your API credentials appear to be properly configured. Try connecting to Binance API.</p>
-    </div>
-    `}
   `;
-  document.getElementById('configDebug').style.display = 'block';
   
-  if (data.binance_api_key_set && data.binance_secret_key_set) {
-    status('API configuration looks good - try connecting');
-  } else {
-    status('API configuration issue - check Railway environment variables');
-  }
+  configDiv.style.display = configDiv.style.display === 'none' ? 'block' : 'none';
 }
 
 //-------------------------------------------------------------
@@ -239,99 +207,170 @@ async function refreshEarn() {
 
 async function refreshTracked() {
   const data = await api('/api/tracked-positions');
-  if (data.success && data.tracked_positions.length) {
-    document.getElementById('trackedPositions').innerHTML = data.tracked_positions.map(p => `
-      <div class="item">
-        <strong>${p.symbol} ${p.side}</strong>
-        <small>Strategy: ${p.strategy_id} | Qty: ${p.quantity} | Entry: $${p.entry_price.toFixed(4)} | Age: ${p.age_minutes}m</small>
-      </div>`).join('');
-  } else {
-    document.getElementById('trackedPositions').innerHTML = '<p>No tracked positions</p>';
+  if (data.error) return console.warn(data.error);
+  
+  const positions = data.tracked_positions || [];
+  document.getElementById('tracked').textContent = positions.length;
+  
+  if (positions.length === 0) {
+    document.getElementById('trackedPositions').innerHTML = '<p style="color: #8b949e;">No tracked positions</p>';
+    return;
   }
-  document.getElementById('tracked').textContent = data.total_positions || 0;
+  
+  document.getElementById('trackedPositions').innerHTML = positions.map(pos => `
+    <div style="background: #0d1117; padding: 10px; margin: 8px 0; border-radius: 6px; border: 1px solid #30363d;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <strong style="color: #f0f6fc;">${pos.symbol} ${pos.side}</strong>
+        <span style="color: #8b949e; font-size: 0.9em;">${pos.age_minutes}m ago</span>
+      </div>
+      <div style="font-size: 0.9em; color: #8b949e; margin-top: 5px;">
+        Qty: ${pos.quantity} | Entry: $${pos.entry_price.toFixed(4)} | Strategy: ${pos.strategy_id}
+      </div>
+    </div>
+  `).join('');
 }
 
 async function loadStrategies() {
-  const strategies = await api('/api/strategies');
-  document.getElementById('strategies').textContent = strategies.length;
-  document.getElementById('signals').textContent = strategies.reduce((sum, s) => sum + s.total_signals, 0);
+  const data = await api('/api/strategies');
+  const strategies = Array.isArray(data) ? data : [];
   
-  document.getElementById('strategiesList').innerHTML = strategies.length ? strategies.map(s => `
-    <div class="item">
-      <h4>${s.name}</h4>
-      <p>${s.description || 'No description'}</p>
-      <small>ID: ${s.id} | Signals: ${s.total_signals}</small>
-      <div style="margin-top: 10px;">
-        <code style="font-size: 0.7em; word-break: break-all;">${location.origin}/webhook/tradingview/strategy/${s.id}</code>
-        <button class="btn" onclick="copyURL(${s.id})" style="font-size: 12px; padding: 4px 8px; margin-top: 5px;">📋 Copy</button>
+  document.getElementById('strategies').textContent = strategies.length;
+  
+  if (strategies.length === 0) {
+    document.getElementById('strategiesList').innerHTML = '<p style="color: #8b949e;">No strategies created yet</p>';
+    return;
+  }
+  
+  document.getElementById('strategiesList').innerHTML = strategies.map(strategy => `
+    <div style="background: #0d1117; padding: 12px; margin: 8px 0; border-radius: 6px; border: 1px solid #30363d;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <strong style="color: #f0f6fc;">${strategy.name}</strong>
+        <span style="color: #244c48; font-weight: bold;">${strategy.total_signals} signals</span>
       </div>
-    </div>`).join('') : '<p>No strategies yet</p>';
+      <p style="color: #8b949e; font-size: 0.9em; margin-bottom: 8px;">${strategy.description || 'No description'}</p>
+      <div style="font-family: monospace; font-size: 0.8em; color: #58a6ff; background: #21262d; padding: 8px; border-radius: 4px; word-break: break-all;">
+        ${location.origin}/webhook/tradingview/strategy/${strategy.id}
+      </div>
+      <button class="btn" onclick="copyURL(${strategy.id})" style="margin-top: 8px; font-size: 0.8em;">📋 Copy URL</button>
+    </div>
+  `).join('');
 }
 
 async function createStrategy() {
-  const name = document.getElementById('strategyName').value;
-  if (!name) return status('Enter strategy name');
+  const name = document.getElementById('strategyName').value.trim();
+  const description = document.getElementById('strategyDesc').value.trim();
   
-  const result = await api('/api/strategies', {
-    method: 'POST',
-    body: JSON.stringify({ name, description: document.getElementById('strategyDesc').value })
+  if (!name) {
+    alert('Please enter a strategy name');
+    return;
+  }
+  
+  const data = await api('/api/strategies', 'POST', {
+    name: name,
+    description: description
   });
   
-  if (result.success) {
+  if (data.success) {
+    status(`Strategy "${name}" created with ID ${data.strategy_id}`);
     document.getElementById('strategyName').value = '';
     document.getElementById('strategyDesc').value = '';
     loadStrategies();
-    status(`Strategy "${name}" created! ID: ${result.strategy_id}`);
   } else {
-    status('Error: ' + result.error);
+    alert('Failed to create strategy: ' + (data.error || 'Unknown error'));
   }
 }
 
 async function refreshWebhooks() {
-  const webhookData = await api('/api/webhooks/activity');
-  document.getElementById('totalWebhooks').textContent = webhookData.length;
-  document.getElementById('lastWebhook').textContent = webhookData.length ? new Date(webhookData[0].timestamp).toLocaleTimeString() : 'Never';
+  const data = await api('/api/webhooks/activity');
+  const webhooks = Array.isArray(data) ? data : [];
   
-  // Live feed
-  document.getElementById('liveFeed').innerHTML = webhookData.slice(0, 5).map(w => `
-    <div class="feed-item">
-      <strong>${new Date(w.timestamp).toLocaleTimeString()} - ${w.strategy_name}</strong>
-      <div style="font-size: 0.8em;">Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Price: $${w.parsed_data.price}</div>
-    </div>`).join('') || '<p>No recent activity</p>';
+  document.getElementById('totalWebhooks').textContent = webhooks.length;
+  document.getElementById('successTrades').textContent = webhooks.filter(w => w.parsed_data).length;
+  document.getElementById('failedWebhooks').textContent = webhooks.filter(w => !w.parsed_data).length;
   
-  // Activity list
-  document.getElementById('activityList').innerHTML = webhookData.slice(0, 10).map(w => `
-    <div class="alert alert-success" style="margin: 5px 0; padding: 8px;">
-      <strong>${w.strategy_name}</strong> - ${new Date(w.timestamp).toLocaleString()}<br>
-      <small>Action: ${w.parsed_data.action} | Symbol: ${w.parsed_data.symbol} | Qty: ${w.parsed_data.quantity} | Price: $${w.parsed_data.price}</small>
-    </div>`).join('') || '<p>No webhook activity</p>';
+  if (webhooks.length > 0) {
+    const lastWebhook = new Date(webhooks[0].timestamp);
+    document.getElementById('lastWebhook').textContent = lastWebhook.toLocaleTimeString();
+    
+    // Update live feed (last 5 webhooks)
+    const recentWebhooks = webhooks.slice(0, 5);
+    document.getElementById('liveFeed').innerHTML = recentWebhooks.map(webhook => `
+      <div class="feed-item">
+        <strong>${webhook.strategy_name}</strong> - ${webhook.parsed_data ? webhook.parsed_data.action : 'PARSE ERROR'} 
+        ${webhook.parsed_data ? webhook.parsed_data.symbol : ''} 
+        <span style="float: right; color: #8b949e; font-size: 0.8em;">
+          ${new Date(webhook.timestamp).toLocaleTimeString()}
+        </span>
+        <br><small style="color: #8b949e;">${webhook.raw_message}</small>
+      </div>
+    `).join('') || '<p style="color: #8b949e;">No recent activity</p>';
+    
+    // Update activity list (last 10 webhooks)
+    document.getElementById('activityList').innerHTML = webhooks.slice(0, 10).map(webhook => `
+      <div class="item">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+          <strong>${webhook.strategy_name} (ID: ${webhook.strategy_id})</strong>
+          <span style="color: #8b949e; font-size: 0.8em;">${new Date(webhook.timestamp).toLocaleString()}</span>
+        </div>
+        <div style="background: #21262d; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+          ${webhook.raw_message}
+        </div>
+        ${webhook.parsed_data ? `
+          <div style="margin-top: 5px; font-size: 0.9em;">
+            <span style="color: #244c48;">Action:</span> ${webhook.parsed_data.action} | 
+            <span style="color: #244c48;">Symbol:</span> ${webhook.parsed_data.symbol} | 
+            <span style="color: #244c48;">Qty:</span> ${webhook.parsed_data.quantity} | 
+            <span style="color: #244c48;">Price:</span> $${webhook.parsed_data.price.toFixed(4)}
+          </div>
+        ` : '<div style="color: #962c2f; font-size: 0.9em;">⚠️ Failed to parse message</div>'}
+      </div>
+    `).join('') || '<p style="color: #8b949e;">No webhook activity yet</p>';
+  } else {
+    document.getElementById('lastWebhook').textContent = 'Never';
+    document.getElementById('liveFeed').innerHTML = '<p style="color: #8b949e;">Waiting for signals...</p>';
+    document.getElementById('activityList').innerHTML = '<p style="color: #8b949e;">No activity yet</p>';
+  }
 }
 
 async function testParsing() {
-  const message = document.getElementById('testMessage').value;
-  if (!message) return status('Enter test message');
+  const message = document.getElementById('testMessage').value.trim();
+  if (!message) {
+    alert('Please enter a test message');
+    return;
+  }
   
-  const result = await api('/webhook/debug-parse', {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: message
-  });
+  const data = await api('/webhook/debug-parse', 'POST', message);
   
-  document.getElementById('parseResult').innerHTML = `
-    <div class="help" style="margin-top: 10px;">
-      <h5>🔍 Parsing Results</h5>
-      <p><strong>Action:</strong> ${result.parsed_result.action}</p>
-      <p><strong>Symbol:</strong> ${result.parsed_result.symbol}</p>
-      <p><strong>Quantity:</strong> ${result.parsed_result.quantity}</p>
-      <p><strong>Price:</strong> Will fetch from Binance API</p>
-    </div>`;
+  const resultDiv = document.getElementById('parseResult');
+  if (data.parsed_result && !data.parsed_result.error) {
+    resultDiv.innerHTML = `
+      <div style="background: #0d1117; border: 1px solid #244c48; padding: 12px; border-radius: 6px; margin-top: 10px;">
+        <h5 style="color: #244c48; margin-bottom: 10px;">✅ Parse Success</h5>
+        <p><strong>Action:</strong> ${data.parsed_result.action}</p>
+        <p><strong>Symbol:</strong> ${data.parsed_result.symbol}</p>
+        <p><strong>Quantity:</strong> ${data.parsed_result.quantity}</p>
+      </div>
+    `;
+  } else {
+    resultDiv.innerHTML = `
+      <div style="background: #0d1117; border: 1px solid #962c2f; padding: 12px; border-radius: 6px; margin-top: 10px;">
+        <h5 style="color: #962c2f; margin-bottom: 10px;">❌ Parse Failed</h5>
+        <p>Unable to parse the message. Check format.</p>
+      </div>
+    `;
+  }
+}
+
+// Copy URL helper
+function copyURL(id) {
+  const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
+  navigator.clipboard.writeText(url);
+  status(`Webhook URL copied for strategy ${id}!`);
 }
 
 function refreshAll() {
-  if (activeClientId) {
-    refreshBalance();
-    refreshPositions();
-    refreshEarn();
-  }
+  refreshBalance();
+  refreshPositions();
+  refreshEarn();
   refreshTracked();
 }

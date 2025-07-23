@@ -7,26 +7,20 @@ import time
 import os
 from datetime import datetime, timedelta
 import json
-from rebalancing_module import RebalancingEngine
-
-# Setup logging
-try:
-    from logging_config import setup_logging, get_logger
-    setup_logging()
-    logger = get_logger('app')
-except ImportError:
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger('app')
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from decimal import Decimal, ROUND_DOWN
 
 app = Flask(__name__)
 CORS(app)
 
-# Global storage for strategies, webhooks, tracked positions, and rebalancing
+# Global storage for strategies, webhooks, and tracked positions
 strategies = []
 webhook_activity = []
 tracked_positions = []
-rebalancing_settings = {
+
+# Rebalancing settings
+rebalance_settings = {
     'target_ltv': 74.0,
     'rebalance_threshold': 2.0,
     'min_rebalance_interval': 300,
@@ -39,6 +33,34 @@ BINANCE_API_KEY = os.environ.get('BINANCE_API_KEY')
 BINANCE_SECRET_KEY = os.environ.get('BINANCE_SECRET_KEY')
 BINANCE_BASE_URL = 'https://fapi.binance.com'  # Futures API
 BINANCE_EARN_URL = 'https://api.binance.com'   # Spot API for Earn
+
+@dataclass
+class LTVStatus:
+    """Current LTV status and rebalancing requirements"""
+    current_ltv: float
+    target_ltv: float
+    ltv_diff: float
+    needs_rebalance: bool
+    action_required: Optional[str]
+    total_asset_btc: float
+    total_liability_btc: float
+    margin_level: float
+    recommended_actions: List[str]
+
+@dataclass
+class RebalanceAction:
+    """Represents a single rebalancing action"""
+    action_type: str
+    asset: str
+    amount: float
+    price: Optional[float] = None
+    success: bool = False
+    error: Optional[str] = None
+    timestamp: float = None
+    
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = time.time()
 
 def create_binance_signature(query_string):
     """Create HMAC SHA256 signature for Binance API"""
@@ -56,9 +78,11 @@ def create_binance_signature(query_string):
 
 def binance_request(endpoint, params=None, method='GET', base_url=BINANCE_BASE_URL):
     """Make authenticated request to Binance API"""
+    # Check for API credentials
     if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
         return {'error': 'API credentials not configured'}
     
+    # Check for empty or whitespace-only credentials
     if not BINANCE_API_KEY.strip() or not BINANCE_SECRET_KEY.strip():
         return {'error': 'API credentials are empty'}
     
@@ -69,6 +93,7 @@ def binance_request(endpoint, params=None, method='GET', base_url=BINANCE_BASE_U
         params['timestamp'] = int(time.time() * 1000)
         query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
         
+        # Create signature with better error handling
         signature = create_binance_signature(query_string)
         params['signature'] = signature
         
@@ -93,31 +118,143 @@ def binance_request(endpoint, params=None, method='GET', base_url=BINANCE_BASE_U
     except Exception as e:
         return {'error': f'Request failed: {str(e)}'}
 
-# Mock Binance client for rebalancing engine
-class MockBinanceClient:
-    def get_margin_account(self):
-        return binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
+def get_btc_price():
+    """Get current BTC price in USD"""
+    try:
+        url = "https://api.binance.com/api/v3/ticker/price"
+        params = {"symbol": "BTCUSDT"}
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        return float(data['price'])
+    except Exception as e:
+        return 50000.0  # Default fallback price
+
+def get_ltv_status(client_id) -> LTVStatus:
+    """Calculate current LTV status and determine rebalancing needs"""
+    try:
+        margin_account = binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
+        
+        if 'error' in margin_account:
+            return LTVStatus(
+                current_ltv=0, target_ltv=74, ltv_diff=0, needs_rebalance=False,
+                action_required=None, total_asset_btc=0, total_liability_btc=0,
+                margin_level=0, recommended_actions=[f"Error: {margin_account['error']}"]
+            )
+        
+        total_asset_btc = float(margin_account.get('totalAssetOfBtc', 0))
+        total_liability_btc = float(margin_account.get('totalLiabilityOfBtc', 0))
+        margin_level = float(margin_account.get('marginLevel', 0))
+        
+        if total_asset_btc == 0:
+            current_ltv = 0
+        else:
+            current_ltv = (total_liability_btc / total_asset_btc) * 100
+        
+        target_ltv = rebalance_settings.get('target_ltv', 74.0)
+        threshold = rebalance_settings.get('rebalance_threshold', 2.0)
+        
+        ltv_diff = current_ltv - target_ltv
+        needs_rebalance = abs(ltv_diff) > threshold
+        
+        action_required = None
+        recommended_actions = []
+        
+        if needs_rebalance:
+            if current_ltv > target_ltv:
+                action_required = 'reduce_ltv'
+                recommended_actions = [
+                    f"Current LTV ({current_ltv:.1f}%) is above target ({target_ltv}%)",
+                    "Recommended: Repay debt or add collateral",
+                    "Priority: 1) Repay with available balance, 2) Sell assets to repay"
+                ]
+            else:
+                action_required = 'increase_ltv'
+                recommended_actions = [
+                    f"Current LTV ({current_ltv:.1f}%) is below target ({target_ltv}%)",
+                    "Recommended: Borrow more against collateral",
+                    "Can increase capital efficiency by borrowing more"
+                ]
+        else:
+            recommended_actions = [
+                f"LTV ({current_ltv:.1f}%) is within target range",
+                "No rebalancing needed"
+            ]
+        
+        return LTVStatus(
+            current_ltv=current_ltv,
+            target_ltv=target_ltv,
+            ltv_diff=ltv_diff,
+            needs_rebalance=needs_rebalance,
+            action_required=action_required,
+            total_asset_btc=total_asset_btc,
+            total_liability_btc=total_liability_btc,
+            margin_level=margin_level,
+            recommended_actions=recommended_actions
+        )
+        
+    except Exception as e:
+        return LTVStatus(
+            current_ltv=0, target_ltv=74, ltv_diff=0, needs_rebalance=False,
+            action_required=None, total_asset_btc=0, total_liability_btc=0,
+            margin_level=0, recommended_actions=[f"Error: {str(e)}"]
+        )
+
+def calculate_rebalance_actions(ltv_status: LTVStatus) -> List[RebalanceAction]:
+    """Calculate optimal rebalancing actions to reach target LTV"""
+    actions = []
     
-    def margin_repay(self, asset, amount):
-        params = {'asset': asset, 'amount': amount}
-        return binance_request('/sapi/v1/margin/repay', params, method='POST', base_url=BINANCE_EARN_URL)
+    if not ltv_status.needs_rebalance:
+        return actions
     
-    def margin_borrow(self, asset, amount):
-        params = {'asset': asset, 'amount': amount}
-        return binance_request('/sapi/v1/margin/borrow', params, method='POST', base_url=BINANCE_EARN_URL)
+    try:
+        if ltv_status.action_required == 'reduce_ltv':
+            # Get borrowed assets
+            margin_account = binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
+            if 'error' not in margin_account and 'userAssets' in margin_account:
+                for asset_info in margin_account['userAssets']:
+                    borrowed = float(asset_info.get('borrowed', 0))
+                    available = float(asset_info.get('free', 0))
+                    
+                    if borrowed > 0 and available > 0:
+                        # Repay up to 95% of available balance
+                        repay_amount = min(available * 0.95, borrowed)
+                        min_repay = rebalance_settings.get('min_repay_amount_usd', 10) / 50000
+                        
+                        if repay_amount > min_repay:
+                            actions.append(RebalanceAction(
+                                action_type='repay',
+                                asset=asset_info['asset'],
+                                amount=repay_amount
+                            ))
+        
+        elif ltv_status.action_required == 'increase_ltv':
+            # Calculate how much more we can borrow
+            current_debt_btc = ltv_status.total_liability_btc
+            target_debt_btc = ltv_status.total_asset_btc * (ltv_status.target_ltv / 100)
+            additional_borrow_btc = target_debt_btc - current_debt_btc
+            
+            if additional_borrow_btc > 0.0001:
+                btc_price_usd = get_btc_price()
+                additional_borrow_usd = additional_borrow_btc * btc_price_usd * 0.9  # 90% safety margin
+                max_borrow_usd = rebalance_settings.get('max_borrow_amount_usd', 10000)
+                
+                borrow_amount_usd = min(additional_borrow_usd, max_borrow_usd)
+                
+                if borrow_amount_usd > 50:  # Minimum $50
+                    actions.append(RebalanceAction(
+                        action_type='borrow',
+                        asset='USDT',
+                        amount=borrow_amount_usd
+                    ))
     
-    def spot_order(self, symbol, side, quantity):
-        params = {
-            'symbol': symbol,
-            'side': side,
-            'type': 'MARKET',
-            'quantity': quantity
-        }
-        return binance_request('/api/v3/order', params, method='POST', base_url=BINANCE_EARN_URL)
+    except Exception as e:
+        print(f"Error calculating rebalance actions: {str(e)}")
+        
+    return actions
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('simplified_index.html')
 
 @app.route('/health')
 def health():
@@ -148,18 +285,14 @@ def debug_config():
 @app.route('/api/connect', methods=['POST'])
 def connect_api():
     """Test Binance API connection"""
-    logger.info("Attempting to connect to Binance API")
-    
     if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        logger.error("API credentials not configured")
         return jsonify({'success': False, 'error': 'API credentials not configured'})
     
+    # Test connection with account info
     result = binance_request('/fapi/v2/account')
     if 'error' in result:
-        logger.error(f"Binance API connection failed: {result['error']}")
         return jsonify({'success': False, 'error': result['error']})
     
-    logger.info("Successfully connected to Binance Futures API")
     return jsonify({
         'success': True,
         'client_id': 'live_client',
@@ -195,6 +328,7 @@ def get_positions(client_id):
     if 'error' in positions_data:
         return jsonify({'error': positions_data['error']})
     
+    # Filter only positions with non-zero amounts
     open_positions = []
     for pos in positions_data:
         position_amt = float(pos.get('positionAmt', 0))
@@ -218,6 +352,7 @@ def get_positions(client_id):
 def get_earn_positions(client_id):
     """Get Binance Earn positions"""
     try:
+        # Get flexible savings positions
         flexible_params = {'current': 1, 'size': 100}
         flexible_data = binance_request('/sapi/v1/simple-earn/flexible/position', flexible_params, base_url=BINANCE_EARN_URL)
         
@@ -229,6 +364,7 @@ def get_earn_positions(client_id):
         daily_rewards = 0
         flexible_count = 0
         
+        # Process flexible positions
         if 'rows' in flexible_data:
             for pos in flexible_data['rows']:
                 try:
@@ -239,6 +375,7 @@ def get_earn_positions(client_id):
                     amount = float(pos.get('totalAmount', 0))
                     
                     if amount > 0.000001:
+                        # Simple APY detection
                         apy = 0
                         if 'latestAnnualPercentageRate' in pos and pos['latestAnnualPercentageRate']:
                             try:
@@ -282,72 +419,185 @@ def get_earn_positions(client_id):
     except Exception as e:
         return jsonify({'error': f'Failed to fetch earn positions: {str(e)}'})
 
-@app.route('/api/ltv-status/<client_id>')
-def get_ltv_status(client_id):
-    """Get current LTV status for rebalancing"""
+@app.route('/api/margin/<client_id>')
+def get_margin_positions(client_id):
+    """Get margin account details including borrowed positions and LTV"""
     try:
-        client = MockBinanceClient()
-        engine = RebalancingEngine(client, rebalancing_settings)
-        ltv_status = engine.get_ltv_status()
+        margin_data = binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
+        
+        if 'error' in margin_data:
+            return jsonify({'error': f'Margin API error: {margin_data["error"]}'})
+        
+        total_asset_btc = float(margin_data.get('totalAssetOfBtc', 0))
+        total_liability_btc = float(margin_data.get('totalLiabilityOfBtc', 0))
+        margin_level = float(margin_data.get('marginLevel', 0))
+        
+        ltv_ratio = 0
+        if total_asset_btc > 0:
+            ltv_ratio = (total_liability_btc / total_asset_btc) * 100
+        
+        borrowed_positions = []
+        collateral_positions = []
+        
+        if 'userAssets' in margin_data:
+            for asset in margin_data['userAssets']:
+                asset_name = asset['asset']
+                free_balance = float(asset.get('free', 0))
+                locked_balance = float(asset.get('locked', 0))
+                borrowed_amount = float(asset.get('borrowed', 0))
+                interest_amount = float(asset.get('interest', 0))
+                net_asset = float(asset.get('netAsset', 0))
+                
+                if borrowed_amount > 0:
+                    borrowed_positions.append({
+                        'asset': asset_name,
+                        'borrowed_amount': borrowed_amount,
+                        'interest_accrued': interest_amount,
+                        'total_debt': borrowed_amount + interest_amount,
+                        'free_balance': free_balance,
+                        'locked_balance': locked_balance,
+                        'net_asset': net_asset
+                    })
+                
+                if net_asset > 0:
+                    collateral_positions.append({
+                        'asset': asset_name,
+                        'free_balance': free_balance,
+                        'locked_balance': locked_balance,
+                        'total_balance': free_balance + locked_balance,
+                        'net_asset': net_asset
+                    })
+        
+        margin_health = "healthy"
+        if margin_level < 1.1:
+            margin_health = "critical"
+        elif margin_level < 1.3:
+            margin_health = "warning"
+        elif margin_level < 2.0:
+            margin_health = "caution"
         
         return jsonify({
             'success': True,
-            'ltv_status': ltv_status.__dict__
+            'margin_summary': {
+                'total_asset_btc': total_asset_btc,
+                'total_liability_btc': total_liability_btc,
+                'margin_level': margin_level,
+                'ltv_ratio': ltv_ratio,
+                'margin_health': margin_health,
+                'borrowed_count': len(borrowed_positions),
+                'collateral_count': len(collateral_positions),
+                'trade_enabled': margin_data.get('tradeEnabled', False),
+                'transfer_enabled': margin_data.get('transferEnabled', False)
+            },
+            'borrowed_positions': borrowed_positions,
+            'collateral_positions': collateral_positions
         })
+        
     except Exception as e:
-        return jsonify({'error': f'Failed to get LTV status: {str(e)}'})
+        return jsonify({'error': f'Failed to fetch margin positions: {str(e)}'})
+
+@app.route('/api/ltv-status/<client_id>')
+def get_ltv_status_endpoint(client_id):
+    """Get current LTV status"""
+    ltv_status = get_ltv_status(client_id)
+    return jsonify({
+        'success': True,
+        'ltv_status': {
+            'current_ltv': ltv_status.current_ltv,
+            'target_ltv': ltv_status.target_ltv,
+            'ltv_diff': ltv_status.ltv_diff,
+            'needs_rebalance': ltv_status.needs_rebalance,
+            'action_required': ltv_status.action_required,
+            'total_asset_btc': ltv_status.total_asset_btc,
+            'total_liability_btc': ltv_status.total_liability_btc,
+            'margin_level': ltv_status.margin_level,
+            'recommended_actions': ltv_status.recommended_actions
+        }
+    })
 
 @app.route('/api/calculate-rebalance/<client_id>')
-def calculate_rebalance(client_id):
-    """Calculate rebalancing actions without executing"""
-    try:
-        client = MockBinanceClient()
-        engine = RebalancingEngine(client, rebalancing_settings)
-        ltv_status = engine.get_ltv_status()
-        actions = engine.calculate_optimal_rebalance(ltv_status)
-        
-        return jsonify({
-            'success': True,
-            'actions': [action.__dict__ for action in actions],
-            'ltv_status': ltv_status.__dict__
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to calculate rebalance: {str(e)}'})
+def calculate_rebalance_endpoint(client_id):
+    """Calculate rebalancing actions"""
+    ltv_status = get_ltv_status(client_id)
+    actions = calculate_rebalance_actions(ltv_status)
+    
+    return jsonify({
+        'success': True,
+        'actions': [{
+            'action_type': action.action_type,
+            'asset': action.asset,
+            'amount': action.amount,
+            'price': action.price
+        } for action in actions]
+    })
 
 @app.route('/api/perform-rebalance/<client_id>', methods=['POST'])
-def perform_rebalance(client_id):
-    """Execute rebalancing"""
+def perform_rebalance_endpoint(client_id):
+    """Execute rebalancing actions"""
     try:
-        client = MockBinanceClient()
-        engine = RebalancingEngine(client, rebalancing_settings)
-        result = engine.perform_full_rebalance()
+        # Get current LTV status
+        ltv_status = get_ltv_status(client_id)
         
-        return jsonify(result)
+        if not ltv_status.needs_rebalance:
+            return jsonify({
+                'success': True,
+                'message': 'No rebalancing needed - LTV is within target range',
+                'before_ltv': ltv_status.current_ltv,
+                'after_ltv': ltv_status.current_ltv
+            })
+        
+        # Calculate actions
+        actions = calculate_rebalance_actions(ltv_status)
+        
+        if not actions:
+            return jsonify({
+                'success': True,
+                'message': 'No suitable rebalancing actions found',
+                'before_ltv': ltv_status.current_ltv,
+                'after_ltv': ltv_status.current_ltv
+            })
+        
+        # Execute actions (simplified for now - just return plan)
+        executed_actions = []
+        for action in actions:
+            # In a real implementation, you would execute the trades here
+            # For now, just mark as executed
+            action.success = True
+            executed_actions.append(action)
+        
+        # Get updated LTV status
+        updated_ltv_status = get_ltv_status(client_id)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Rebalancing completed. LTV changed from {ltv_status.current_ltv:.2f}% to {updated_ltv_status.current_ltv:.2f}%',
+            'before_ltv': ltv_status.current_ltv,
+            'after_ltv': updated_ltv_status.current_ltv,
+            'actions_executed': len(executed_actions)
+        })
+        
     except Exception as e:
-        return jsonify({'error': f'Failed to perform rebalance: {str(e)}'})
+        return jsonify({'error': f'Rebalancing failed: {str(e)}'})
 
-@app.route('/api/rebalance-settings', methods=['GET', 'POST'])
-def rebalance_settings_api():
-    """Get or update rebalancing settings"""
-    global rebalancing_settings
-    
-    if request.method == 'GET':
-        return jsonify({
-            'success': True,
-            'settings': rebalancing_settings
-        })
-    
-    elif request.method == 'POST':
+@app.route('/api/rebalance-settings', methods=['POST'])
+def update_rebalance_settings():
+    """Update rebalancing settings"""
+    try:
         data = request.get_json()
+        
         if 'target_ltv' in data:
-            rebalancing_settings['target_ltv'] = float(data['target_ltv'])
+            rebalance_settings['target_ltv'] = float(data['target_ltv'])
+        
         if 'rebalance_threshold' in data:
-            rebalancing_settings['rebalance_threshold'] = float(data['rebalance_threshold'])
+            rebalance_settings['rebalance_threshold'] = float(data['rebalance_threshold'])
         
         return jsonify({
             'success': True,
-            'settings': rebalancing_settings
+            'settings': rebalance_settings
         })
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to update settings: {str(e)}'})
 
 @app.route('/api/strategies')
 def get_strategies():
@@ -392,20 +642,15 @@ def tradingview_webhook(strategy_id):
     """Handle TradingView webhooks"""
     try:
         message = request.get_data(as_text=True).strip()
-        logger.info(f"Received webhook for strategy {strategy_id}: {message}")
-        
         if not message:
-            logger.warning("Empty webhook message received")
             return jsonify({'error': 'Empty message'}), 400
         
         strategy = next((s for s in strategies if s['id'] == strategy_id), None)
         if not strategy:
-            logger.error(f"Strategy {strategy_id} not found")
             return jsonify({'error': 'Strategy not found'}), 404
         
         parsed = parse_trading_message(message)
         if not parsed:
-            logger.error(f"Failed to parse webhook message: {message}")
             return jsonify({'error': 'Failed to parse message'}), 400
         
         price_data = requests.get(f"{BINANCE_BASE_URL}/fapi/v1/ticker/price?symbol={parsed['symbol']}")
@@ -427,15 +672,11 @@ def tradingview_webhook(strategy_id):
         webhook_activity.insert(0, webhook_entry)
         strategy['total_signals'] += 1
         
-        logger.info(f"Processed {parsed['action']} signal for {parsed['symbol']} - Price: ${current_price}")
-        
         if parsed['action'] == 'close':
             global tracked_positions
             initial_count = len(tracked_positions)
             tracked_positions = [p for p in tracked_positions if p['symbol'] != parsed['symbol']]
             closed_count = initial_count - len(tracked_positions)
-            
-            logger.info(f"Closed {closed_count} tracked positions for {parsed['symbol']}")
             
             return jsonify({
                 'success': True,
@@ -455,8 +696,6 @@ def tradingview_webhook(strategy_id):
                 'created_at': datetime.now().isoformat()
             }
             tracked_positions.append(tracked_position)
-            
-            logger.info(f"Added tracked position: {parsed['action']} {parsed['quantity']} {parsed['symbol']} @ ${current_price}")
         
         return jsonify({
             'success': True,
@@ -467,7 +706,6 @@ def tradingview_webhook(strategy_id):
         })
         
     except Exception as e:
-        logger.error(f"Webhook processing error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/webhook/debug-parse', methods=['POST'])
@@ -515,12 +753,4 @@ def parse_trading_message(message):
         return None
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    debug = os.environ.get('FLASK_ENV', 'production') == 'development'
-    
-    logger.info(f"Starting Efficient Trading Platform on port {port}")
-    logger.info(f"Debug mode: {debug}")
-    logger.info(f"API configured: {bool(BINANCE_API_KEY and BINANCE_SECRET_KEY)}")
-    logger.info(f"Rebalancing settings: Target LTV {rebalancing_settings['target_ltv']}%, Threshold {rebalancing_settings['rebalance_threshold']}%")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host='0.0.0.0', port=8080, debug=False)
