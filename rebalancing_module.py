@@ -1,6 +1,6 @@
 """
-Rebalancing Module for Binance Margin Trading
-Maintains target LTV ratio by automatically managing borrowing and repaying
+Rebalancing Module for Binance Loans
+Maintains target LTV ratio by automatically managing borrowing and repaying of loans
 """
 
 import time
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RebalanceAction:
     """Represents a single rebalancing action"""
-    action_type: str  # 'borrow', 'repay', 'buy', 'sell'
+    action_type: str  # 'borrow', 'repay', 'add_collateral'
     asset: str
     amount: float
     price: Optional[float] = None
@@ -35,13 +35,13 @@ class LTVStatus:
     ltv_diff: float
     needs_rebalance: bool
     action_required: Optional[str]  # 'reduce_ltv', 'increase_ltv', None
-    total_asset_btc: float
-    total_liability_btc: float
-    margin_level: float
+    total_collateral_btc: float
+    total_debt_btc: float
+    health_status: str
     recommended_actions: List[str]
 
-class RebalancingEngine:
-    """Main rebalancing engine for maintaining target LTV"""
+class LoanRebalancingEngine:
+    """Main rebalancing engine for maintaining target LTV on Binance loans"""
     
     def __init__(self, binance_client, settings: Dict):
         self.client = binance_client
@@ -52,22 +52,57 @@ class RebalancingEngine:
     def get_ltv_status(self) -> LTVStatus:
         """Calculate current LTV status and determine rebalancing needs"""
         try:
-            margin_account = self.client.get_margin_account()
+            # Get ongoing loans
+            loans_data = self.client.request('/sapi/v1/loan/ongoing/orders', {'current': 1, 'size': 100})
             
-            total_asset_btc = float(margin_account.get('totalAssetOfBtc', 0))
-            total_liability_btc = float(margin_account.get('totalLiabilityOfBtc', 0))
-            margin_level = float(margin_account.get('marginLevel', 0))
+            if 'error' in loans_data:
+                return self._create_error_status(f"Failed to get loans: {loans_data['error']}")
             
-            if total_asset_btc == 0:
-                current_ltv = 0
-            else:
-                current_ltv = (total_liability_btc / total_asset_btc) * 100
+            total_collateral_btc = 0
+            total_debt_btc = 0
+            active_loans = 0
+            
+            if 'rows' in loans_data:
+                for loan in loans_data['rows']:
+                    try:
+                        loan_coin = loan.get('loanCoin', '')
+                        collateral_coin = loan.get('collateralCoin', '')
+                        principal_amount = float(loan.get('initialPrincipal', 0))
+                        collateral_amount = float(loan.get('initialCollateral', 0))
+                        
+                        if principal_amount > 0:
+                            active_loans += 1
+                            
+                            # Convert to BTC equivalent (simplified)
+                            debt_btc = self._convert_to_btc(principal_amount, loan_coin)
+                            collateral_btc = self._convert_to_btc(collateral_amount, collateral_coin)
+                            
+                            total_debt_btc += debt_btc
+                            total_collateral_btc += collateral_btc
+                    
+                    except Exception as e:
+                        logger.warning(f"Error processing loan: {str(e)}")
+                        continue
+            
+            # Calculate LTV
+            current_ltv = 0
+            if total_collateral_btc > 0:
+                current_ltv = (total_debt_btc / total_collateral_btc) * 100
             
             target_ltv = self.settings.get('target_ltv', 74.0)
             threshold = self.settings.get('rebalance_threshold', 2.0)
             
             ltv_diff = current_ltv - target_ltv
             needs_rebalance = abs(ltv_diff) > threshold
+            
+            # Determine health status
+            health_status = "healthy"
+            if current_ltv > 85:
+                health_status = "critical"
+            elif current_ltv > 75:
+                health_status = "warning"
+            elif current_ltv > 65:
+                health_status = "caution"
             
             action_required = None
             recommended_actions = []
@@ -77,8 +112,8 @@ class RebalancingEngine:
                     action_required = 'reduce_ltv'
                     recommended_actions = [
                         f"Current LTV ({current_ltv:.1f}%) is above target ({target_ltv}%)",
-                        "Recommended actions: Repay debt or add collateral",
-                        "Priority: 1) Repay with available balance, 2) Sell assets to repay"
+                        "Recommended actions: Repay loans or add collateral",
+                        "Priority: 1) Repay with available balance, 2) Add more collateral"
                     ]
                 else:
                     action_required = 'increase_ltv'
@@ -99,57 +134,105 @@ class RebalancingEngine:
                 ltv_diff=ltv_diff,
                 needs_rebalance=needs_rebalance,
                 action_required=action_required,
-                total_asset_btc=total_asset_btc,
-                total_liability_btc=total_liability_btc,
-                margin_level=margin_level,
+                total_collateral_btc=total_collateral_btc,
+                total_debt_btc=total_debt_btc,
+                health_status=health_status,
                 recommended_actions=recommended_actions
             )
             
         except Exception as e:
             logger.error(f"Error calculating LTV status: {str(e)}")
-            return LTVStatus(
-                current_ltv=0, target_ltv=74, ltv_diff=0, needs_rebalance=False,
-                action_required=None, total_asset_btc=0, total_liability_btc=0,
-                margin_level=0, recommended_actions=[f"Error: {str(e)}"]
-            )
+            return self._create_error_status(f"Error: {str(e)}")
     
-    def get_borrowed_assets(self) -> List[Dict]:
-        """Get list of borrowed assets with details"""
+    def _create_error_status(self, error_msg: str) -> LTVStatus:
+        """Create error LTV status"""
+        return LTVStatus(
+            current_ltv=0, target_ltv=74, ltv_diff=0, needs_rebalance=False,
+            action_required=None, total_collateral_btc=0, total_debt_btc=0,
+            health_status="error", recommended_actions=[error_msg]
+        )
+    
+    def _convert_to_btc(self, amount: float, asset: str) -> float:
+        """Convert asset amount to BTC equivalent"""
+        if asset == 'BTC':
+            return amount
+        elif asset in ['USDT', 'BUSD', 'USDC']:
+            # Use approximate BTC price (in real implementation, get from API)
+            btc_price = self._get_btc_price()
+            return amount / btc_price
+        else:
+            # For other assets, would need price conversion
+            # For now, return 0 or implement specific conversions
+            return 0
+    
+    def get_loan_positions(self) -> List[Dict]:
+        """Get list of active loan positions"""
         try:
-            margin_account = self.client.get_margin_account()
-            borrowed_assets = []
+            loans_data = self.client.request('/sapi/v1/loan/ongoing/orders', {'current': 1, 'size': 100})
             
-            for asset_info in margin_account.get('userAssets', []):
-                borrowed = float(asset_info.get('borrowed', 0))
-                if borrowed > 0:
-                    borrowed_assets.append({
-                        'asset': asset_info['asset'],
-                        'borrowed': borrowed,
-                        'free': float(asset_info.get('free', 0)),
-                        'locked': float(asset_info.get('locked', 0)),
-                        'interest': float(asset_info.get('interest', 0)),
-                        'net': float(asset_info.get('netAsset', 0))
-                    })
+            if 'error' in loans_data:
+                logger.error(f"Error getting loan positions: {loans_data['error']}")
+                return []
             
-            return borrowed_assets
+            loan_positions = []
+            
+            if 'rows' in loans_data:
+                for loan in loans_data['rows']:
+                    try:
+                        loan_coin = loan.get('loanCoin', '')
+                        collateral_coin = loan.get('collateralCoin', '')
+                        principal_amount = float(loan.get('initialPrincipal', 0))
+                        collateral_amount = float(loan.get('initialCollateral', 0))
+                        current_ltv = float(loan.get('currentLTV', 0)) * 100
+                        liquidation_ltv = float(loan.get('liquidationLTV', 0)) * 100
+                        
+                        if principal_amount > 0:
+                            loan_positions.append({
+                                'loan_coin': loan_coin,
+                                'collateral_coin': collateral_coin,
+                                'principal_amount': principal_amount,
+                                'collateral_amount': collateral_amount,
+                                'current_ltv': current_ltv,
+                                'liquidation_ltv': liquidation_ltv,
+                                'status': loan.get('status', ''),
+                                'order_id': loan.get('orderId', ''),
+                                'interest_rate': float(loan.get('interestRate', 0))
+                            })
+                    
+                    except Exception as e:
+                        logger.warning(f"Error processing loan position: {str(e)}")
+                        continue
+            
+            return loan_positions
+            
         except Exception as e:
-            logger.error(f"Error getting borrowed assets: {str(e)}")
+            logger.error(f"Error getting loan positions: {str(e)}")
             return []
     
-    def get_available_for_repay(self) -> Dict[str, float]:
-        """Get available balances that can be used for repaying debt"""
+    def get_available_balances(self) -> Dict[str, float]:
+        """Get available balances that can be used for repaying loans or adding collateral"""
         try:
-            margin_account = self.client.get_margin_account()
-            available_assets = {}
+            # Get spot wallet balances
+            account_data = self.client.request('/api/v3/account', {})
             
-            for asset_info in margin_account.get('userAssets', []):
-                free_balance = float(asset_info.get('free', 0))
-                if free_balance > 0:
-                    available_assets[asset_info['asset']] = free_balance
+            if 'error' in account_data:
+                logger.error(f"Error getting account data: {account_data['error']}")
+                return {}
             
-            return available_assets
+            available_balances = {}
+            
+            if 'balances' in account_data:
+                for balance in account_data['balances']:
+                    asset = balance['asset']
+                    free_balance = float(balance.get('free', 0))
+                    
+                    if free_balance > 0:
+                        available_balances[asset] = free_balance
+            
+            return available_balances
+            
         except Exception as e:
-            logger.error(f"Error getting available assets: {str(e)}")
+            logger.error(f"Error getting available balances: {str(e)}")
             return {}
     
     def calculate_optimal_rebalance(self, ltv_status: LTVStatus) -> List[RebalanceAction]:
@@ -174,41 +257,70 @@ class RebalancingEngine:
         return actions
     
     def _calculate_debt_reduction_actions(self, ltv_status: LTVStatus) -> List[RebalanceAction]:
-        """Calculate actions to reduce LTV (repay debt or add collateral)"""
+        """Calculate actions to reduce LTV (repay loans or add collateral)"""
         actions = []
         
-        # Get borrowed assets and available balances
-        borrowed_assets = self.get_borrowed_assets()
-        available_balances = self.get_available_for_repay()
+        # Get loan positions and available balances
+        loan_positions = self.get_loan_positions()
+        available_balances = self.get_available_balances()
         
         # Calculate target debt reduction needed
-        current_debt_btc = ltv_status.total_liability_btc
-        target_debt_btc = ltv_status.total_asset_btc * (ltv_status.target_ltv / 100)
+        current_debt_btc = ltv_status.total_debt_btc
+        target_debt_btc = ltv_status.total_collateral_btc * (ltv_status.target_ltv / 100)
         debt_reduction_needed_btc = current_debt_btc - target_debt_btc
         
         if debt_reduction_needed_btc <= 0:
             return actions
         
+        # Convert to USDT for easier calculation
+        debt_reduction_needed_usdt = debt_reduction_needed_btc * self._get_btc_price()
+        
         # Strategy 1: Repay using available balances
-        for borrowed_asset in borrowed_assets:
-            asset = borrowed_asset['asset']
-            borrowed_amount = borrowed_asset['borrowed']
-            available_amount = available_balances.get(asset, 0)
+        for loan in loan_positions:
+            loan_coin = loan['loan_coin']
+            principal_amount = loan['principal_amount']
+            available_amount = available_balances.get(loan_coin, 0)
             
             if available_amount > 0:
                 # Repay up to 95% of available balance (keep some buffer)
-                repay_amount = min(available_amount * 0.95, borrowed_amount)
-                min_repay = self.settings.get('min_repay_amount_usd', 10) / 50000  # Convert to asset units (approx)
+                repay_amount = min(available_amount * 0.95, principal_amount)
+                min_repay_usd = self.settings.get('min_repay_amount_usd', 10)
                 
-                if repay_amount > min_repay:
+                # Convert repay amount to USD equivalent for comparison
+                if loan_coin in ['USDT', 'BUSD', 'USDC']:
+                    repay_amount_usd = repay_amount
+                elif loan_coin == 'BTC':
+                    repay_amount_usd = repay_amount * self._get_btc_price()
+                else:
+                    repay_amount_usd = repay_amount  # Fallback
+                
+                if repay_amount_usd > min_repay_usd:
                     actions.append(RebalanceAction(
                         action_type='repay',
-                        asset=asset,
+                        asset=loan_coin,
                         amount=repay_amount
                     ))
         
-        # Strategy 2: If still need to reduce debt, consider selling assets
-        # (Implementation would depend on specific strategy)
+        # Strategy 2: Add collateral if have suitable assets
+        if len(actions) == 0 or debt_reduction_needed_usdt > 1000:  # If still need significant reduction
+            for asset, balance in available_balances.items():
+                if asset in ['BTC', 'ETH', 'BNB'] and balance > 0:  # Common collateral assets
+                    # Add up to 90% of balance as collateral
+                    collateral_amount = balance * 0.9
+                    
+                    # Convert to USD equivalent
+                    if asset == 'BTC':
+                        collateral_usd = collateral_amount * self._get_btc_price()
+                    else:
+                        collateral_usd = collateral_amount * 100  # Rough estimate for other assets
+                    
+                    if collateral_usd > 100:  # Minimum $100 worth
+                        actions.append(RebalanceAction(
+                            action_type='add_collateral',
+                            asset=asset,
+                            amount=collateral_amount
+                        ))
+                        break  # Only add one collateral action at a time
         
         return actions
     
@@ -217,8 +329,8 @@ class RebalancingEngine:
         actions = []
         
         # Calculate how much more we can borrow
-        current_debt_btc = ltv_status.total_liability_btc
-        target_debt_btc = ltv_status.total_asset_btc * (ltv_status.target_ltv / 100)
+        current_debt_btc = ltv_status.total_debt_btc
+        target_debt_btc = ltv_status.total_collateral_btc * (ltv_status.target_ltv / 100)
         additional_borrow_btc = target_debt_btc - current_debt_btc
         
         if additional_borrow_btc <= 0.0001:  # Minimum meaningful amount
@@ -230,13 +342,13 @@ class RebalancingEngine:
         max_borrow_usd = self.settings.get('max_borrow_amount_usd', 10000)
         
         # Limit borrowing amount
-        borrow_amount_usd = min(additional_borrow_usd, max_borrow_usd)
+        borrow_amount_usdt = min(additional_borrow_usd, max_borrow_usd)
         
-        if borrow_amount_usd > 50:  # Minimum $50
+        if borrow_amount_usdt > 50:  # Minimum $50
             actions.append(RebalanceAction(
                 action_type='borrow',
                 asset='USDT',
-                amount=borrow_amount_usd
+                amount=borrow_amount_usdt
             ))
         
         return actions
@@ -261,22 +373,62 @@ class RebalancingEngine:
         for action in actions:
             try:
                 if action.action_type == 'repay':
-                    result = self.client.margin_repay(action.asset, action.amount)
-                    action.success = True
-                    logger.info(f"Successfully repaid {action.amount} {action.asset}")
+                    # Find the loan to repay
+                    loans = self.get_loan_positions()
+                    target_loan = None
+                    
+                    for loan in loans:
+                        if loan['loan_coin'] == action.asset:
+                            target_loan = loan
+                            break
+                    
+                    if target_loan:
+                        result = self.client.request('/sapi/v1/loan/repay', {
+                            'orderId': target_loan['order_id'],
+                            'amount': action.amount
+                        }, method='POST')
+                        
+                        if 'error' not in result:
+                            action.success = True
+                            logger.info(f"Successfully repaid {action.amount} {action.asset}")
+                        else:
+                            action.error = result['error']
+                    else:
+                        action.error = f"No active loan found for {action.asset}"
                 
                 elif action.action_type == 'borrow':
-                    result = self.client.margin_borrow(action.asset, action.amount)
-                    action.success = True
-                    logger.info(f"Successfully borrowed {action.amount} {action.asset}")
+                    # Create new loan (simplified - would need collateral asset specification)
+                    result = self.client.request('/sapi/v1/loan/borrow', {
+                        'loanCoin': action.asset,
+                        'loanAmount': action.amount,
+                        'collateralCoin': 'BTC',  # Default collateral
+                        'loanTerm': 7  # 7 days default
+                    }, method='POST')
+                    
+                    if 'error' not in result:
+                        action.success = True
+                        logger.info(f"Successfully borrowed {action.amount} {action.asset}")
+                    else:
+                        action.error = result['error']
                 
-                elif action.action_type == 'buy' or action.action_type == 'sell':
-                    # For spot trading to rebalance
-                    symbol = f"{action.asset}USDT"
-                    side = 'BUY' if action.action_type == 'buy' else 'SELL'
-                    result = self.client.spot_order(symbol, side, action.amount)
-                    action.success = True
-                    logger.info(f"Successfully executed {action.action_type} {action.amount} {action.asset}")
+                elif action.action_type == 'add_collateral':
+                    # Add collateral to existing loan (simplified)
+                    loans = self.get_loan_positions()
+                    if loans:
+                        target_loan = loans[0]  # Add to first loan for simplicity
+                        result = self.client.request('/sapi/v1/loan/adjust/ltv', {
+                            'orderId': target_loan['order_id'],
+                            'amount': action.amount,
+                            'direction': 'ADDITIONAL'
+                        }, method='POST')
+                        
+                        if 'error' not in result:
+                            action.success = True
+                            logger.info(f"Successfully added {action.amount} {action.asset} as collateral")
+                        else:
+                            action.error = result['error']
+                    else:
+                        action.error = "No active loans to add collateral to"
                 
                 executed_actions.append(action)
                 

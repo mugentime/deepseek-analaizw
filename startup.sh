@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Efficient Trading Platform Startup Script
-# Enhanced version with rebalancing support and better error handling
+# Simple Trading Platform Startup Script
+# Updated version with health checks and better error handling
 
 set -e
 
-echo "🚀 Starting Efficient Trading Platform with Rebalancing..."
+echo "🚀 Starting Efficient Trading Platform..."
 
 # Check if we're in the correct directory
 if [ ! -f "app.py" ]; then
@@ -47,148 +47,114 @@ fi
 echo "📦 Upgrading pip..."
 pip install --upgrade pip
 
-# Install all requirements
+# Install requirements
 echo "📦 Installing dependencies..."
-pip install -r requirements.txt
-
-# Try to install additional production dependencies
-echo "📦 Installing additional production dependencies..."
-
-# Install APScheduler for advanced scheduling
-if pip install APScheduler>=3.10.0; then
-    echo "✅ APScheduler installed for advanced scheduling"
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt
 else
-    echo "⚠️  APScheduler installation failed"
-fi
-
-# Install python-dotenv for better .env support
-if pip install python-dotenv>=1.0.0; then
-    echo "✅ python-dotenv installed"
-else
-    echo "⚠️  python-dotenv installation failed"
+    echo "⚠️  requirements.txt not found, installing minimal dependencies..."
+    pip install Flask>=3.0.0 flask-cors>=4.0.0 requests>=2.30.0 gunicorn>=22.0.0
 fi
 
 # Create .env file if it doesn't exist
 if [ ! -f ".env" ]; then
-    echo "📝 Creating .env file from template..."
+    echo "📝 Creating .env file template..."
     cat > .env << EOF
 # Binance API Configuration
 BINANCE_API_KEY=your_binance_api_key_here
 BINANCE_SECRET_KEY=your_binance_secret_key_here
-
-# Rebalancing Settings
-DEFAULT_TARGET_LTV=74.0
-DEFAULT_REBALANCE_THRESHOLD=2.0
-MIN_REBALANCE_INTERVAL=300
-MAX_BORROW_AMOUNT_USD=10000
-MIN_REPAY_AMOUNT_USD=10
 
 # Flask Configuration
 FLASK_ENV=production
 PORT=8080
 LOG_LEVEL=INFO
 
-# Optional: Webhook Settings
-WEBHOOK_SECRET=your_webhook_secret_here
-ENABLE_AUTO_REBALANCE=false
+# Rebalancing Settings
+DEFAULT_TARGET_LTV=74.0
+DEFAULT_REBALANCE_THRESHOLD=2.0
+MIN_REBALANCE_INTERVAL=300
 EOF
     echo "⚠️  Please edit .env file with your actual API keys before starting"
 fi
 
+# Load environment variables
+if [ -f ".env" ]; then
+    echo "🔧 Loading environment variables..."
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Set default environment variables
+export FLASK_ENV=${FLASK_ENV:-production}
+export PORT=${PORT:-8080}
+
 # Create logs directory
 mkdir -p logs
 
-# Set environment variables with defaults
-export FLASK_ENV=${FLASK_ENV:-production}
-export PORT=${PORT:-8080}
-export DEFAULT_TARGET_LTV=${DEFAULT_TARGET_LTV:-74.0}
-export LOG_LEVEL=${LOG_LEVEL:-INFO}
-
-# Check if Gunicorn is available
-GUNICORN_AVAILABLE=false
-if command -v gunicorn &> /dev/null; then
-    GUNICORN_AVAILABLE=true
+# Run health checks
+echo "🏥 Running health checks..."
+if [ -f "health_check.py" ]; then
+    $PYTHON_CMD health_check.py
+    if [ $? -ne 0 ]; then
+        echo "❌ Health checks failed! Please check the errors above."
+        echo "💡 You can still continue, but there may be issues."
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+else
+    echo "⚠️  health_check.py not found, skipping health checks"
 fi
 
 # Display configuration
 echo ""
 echo "⚙️  Configuration:"
 echo "   Port: $PORT"
-echo "   Target LTV: $DEFAULT_TARGET_LTV%"
 echo "   Flask Environment: $FLASK_ENV"
-echo "   Log Level: $LOG_LEVEL"
-echo "   Gunicorn Available: $GUNICORN_AVAILABLE"
+echo "   API Key Set: $([ -n "$BINANCE_API_KEY" ] && [ "$BINANCE_API_KEY" != "your_binance_api_key_here" ] && echo "✅" || echo "❌")"
+echo "   Secret Key Set: $([ -n "$BINANCE_SECRET_KEY" ] && [ "$BINANCE_SECRET_KEY" != "your_binance_secret_key_here" ] && echo "✅" || echo "❌")"
 echo ""
 
 # Check if API keys are configured
-if grep -q "your_binance_api_key_here" .env 2>/dev/null; then
+if [ "$BINANCE_API_KEY" = "your_binance_api_key_here" ] || [ -z "$BINANCE_API_KEY" ]; then
     echo "⚠️  WARNING: Please configure your Binance API keys in .env file"
     echo "   The platform will run with limited functionality"
-    echo ""
-    echo "📋 Required Environment Variables:"
-    echo "   BINANCE_API_KEY - Your Binance API key"
-    echo "   BINANCE_SECRET_KEY - Your Binance secret key"
-    echo ""
-    echo "📋 Optional Environment Variables:"
-    echo "   DEFAULT_TARGET_LTV - Target LTV ratio (default: 74.0)"
-    echo "   DEFAULT_REBALANCE_THRESHOLD - Rebalance threshold (default: 2.0)"
-    echo "   MIN_REBALANCE_INTERVAL - Min seconds between rebalances (default: 300)"
-    echo "   LOG_LEVEL - Logging level (default: INFO)"
-    echo ""
 else
     echo "🔑 API keys configured"
 fi
 
-# Validate critical files exist
-REQUIRED_FILES=("app.py" "rebalancing_module.py" "templates/index.html" "static/frontend-clientid.js")
-for file in "${REQUIRED_FILES[@]}"; do
-    if [ ! -f "$file" ]; then
-        echo "❌ Error: Required file $file not found"
-        exit 1
-    fi
-done
-
-echo "✅ All required files present"
-
-# Check if all required Python packages are available
-echo "🔍 Checking Python package availability..."
-$PYTHON_CMD -c "
-import sys
-try:
-    import flask
-    import flask_cors
-    import requests
-    import hmac
-    import hashlib
-    print('✅ All core packages available')
-except ImportError as e:
-    print(f'❌ Missing package: {e}')
-    sys.exit(1)
-"
-
 echo ""
 echo "🌐 Starting server..."
-echo "   📊 Dashboard will be available at: http://0.0.0.0:$PORT"
-echo "   🔌 Webhook endpoint format: http://0.0.0.0:$PORT/webhook/tradingview/strategy/{strategy_id}"
-echo "   ⚖️ Rebalancing engine: Enabled"
-echo ""
 
-# Start the application based on environment and availability
+# Start the application
 if [ "$FLASK_ENV" = "development" ]; then
     echo "🔧 Starting in DEVELOPMENT mode..."
     $PYTHON_CMD app.py
-elif [ "$GUNICORN_AVAILABLE" = true ]; then
-    echo "🚀 Starting with Gunicorn (Production)..."
-    gunicorn app:app \
-        --bind 0.0.0.0:$PORT \
-        --workers 1 \
-        --timeout 120 \
-        --access-logfile logs/access.log \
-        --error-logfile logs/error.log \
-        --log-level info \
-        --preload
 else
-    echo "🚀 Starting with Python development server..."
-    echo "⚠️  Note: For production, install Gunicorn: pip install gunicorn"
-    $PYTHON_CMD app.py
+    echo "🚀 Starting with Gunicorn..."
+    echo "   Platform will be available at: http://0.0.0.0:$PORT"
+    
+    # Use wsgi.py if available, otherwise fall back to app.py
+    if [ -f "wsgi.py" ]; then
+        echo "   Using WSGI entry point: wsgi.py"
+        gunicorn wsgi:application \
+            --bind 0.0.0.0:$PORT \
+            --workers 1 \
+            --timeout 120 \
+            --access-logfile logs/access.log \
+            --error-logfile logs/error.log \
+            --log-level info \
+            --preload
+    else
+        echo "   Using direct app import: app.py"
+        gunicorn app:app \
+            --bind 0.0.0.0:$PORT \
+            --workers 1 \
+            --timeout 120 \
+            --access-logfile logs/access.log \
+            --error-logfile logs/error.log \
+            --log-level info \
+            --preload
+    fi
 fi

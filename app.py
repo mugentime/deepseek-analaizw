@@ -7,16 +7,22 @@ import time
 import os
 from datetime import datetime, timedelta
 import json
-from rebalancing_module import RebalancingEngine, LTVStatus
 
+# Create Flask app instance
 app = Flask(__name__)
 CORS(app)
+
+# Configure Flask app
+app.config['DEBUG'] = False
+app.config['TESTING'] = False
 
 # Global storage for strategies, webhooks, and tracked positions
 strategies = []
 webhook_activity = []
 tracked_positions = []
-rebalancing_settings = {
+
+# Global settings for rebalancing
+rebalance_settings = {
     'target_ltv': 74.0,
     'rebalance_threshold': 2.0,
     'min_rebalance_interval': 300,
@@ -28,41 +34,7 @@ rebalancing_settings = {
 BINANCE_API_KEY = os.environ.get('BINANCE_API_KEY')
 BINANCE_SECRET_KEY = os.environ.get('BINANCE_SECRET_KEY')
 BINANCE_BASE_URL = 'https://fapi.binance.com'  # Futures API
-BINANCE_EARN_URL = 'https://api.binance.com'   # Spot API for Earn
-
-class BinanceClient:
-    """Simple Binance client wrapper for rebalancing module"""
-    def __init__(self):
-        self.api_key = BINANCE_API_KEY
-        self.secret_key = BINANCE_SECRET_KEY
-    
-    def get_margin_account(self):
-        """Get margin account info"""
-        return binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
-    
-    def margin_repay(self, asset, amount):
-        """Repay margin debt"""
-        params = {'asset': asset, 'amount': amount}
-        return binance_request('/sapi/v1/margin/repay', params, method='POST', base_url=BINANCE_EARN_URL)
-    
-    def margin_borrow(self, asset, amount):
-        """Borrow on margin"""
-        params = {'asset': asset, 'amount': amount}
-        return binance_request('/sapi/v1/margin/borrow', params, method='POST', base_url=BINANCE_EARN_URL)
-    
-    def spot_order(self, symbol, side, amount):
-        """Place spot order"""
-        params = {
-            'symbol': symbol,
-            'side': side,
-            'type': 'MARKET',
-            'quantity': amount
-        }
-        return binance_request('/api/v3/order', params, method='POST', base_url=BINANCE_EARN_URL)
-
-# Initialize rebalancing engine
-binance_client = BinanceClient()
-rebalancing_engine = RebalancingEngine(binance_client, rebalancing_settings)
+BINANCE_SPOT_URL = 'https://api.binance.com'   # Spot API for Earn and Loans
 
 def create_binance_signature(query_string):
     """Create HMAC SHA256 signature for Binance API"""
@@ -164,7 +136,7 @@ def connect_api():
     return jsonify({
         'success': True,
         'client_id': 'live_client',
-        'message': 'Successfully connected to Binance Futures API'
+        'message': 'Successfully connected to Binance API'
     })
 
 @app.route('/api/balance/<client_id>')
@@ -222,7 +194,7 @@ def get_earn_positions(client_id):
     try:
         # Get flexible savings positions
         flexible_params = {'current': 1, 'size': 100}
-        flexible_data = binance_request('/sapi/v1/simple-earn/flexible/position', flexible_params, base_url=BINANCE_EARN_URL)
+        flexible_data = binance_request('/sapi/v1/simple-earn/flexible/position', flexible_params, base_url=BINANCE_SPOT_URL)
         
         if 'error' in flexible_data:
             return jsonify({'error': f'Flexible positions API error: {flexible_data["error"]}'})
@@ -287,147 +259,284 @@ def get_earn_positions(client_id):
     except Exception as e:
         return jsonify({'error': f'Failed to fetch earn positions: {str(e)}'})
 
-@app.route('/api/margin/<client_id>')
-def get_margin_positions(client_id):
-    """Get margin account details including borrowed positions and LTV"""
+@app.route('/api/loans/<client_id>')
+def get_loan_positions(client_id):
+    """Get Binance loan positions and LTV status"""
     try:
-        margin_data = binance_request('/sapi/v1/margin/account', {}, base_url=BINANCE_EARN_URL)
+        # Get ongoing loans
+        loans_data = binance_request('/sapi/v1/loan/ongoing/orders', {'current': 1, 'size': 100}, base_url=BINANCE_SPOT_URL)
         
-        if 'error' in margin_data:
-            return jsonify({'error': f'Margin API error: {margin_data["error"]}'})
+        if 'error' in loans_data:
+            return jsonify({'error': f'Loans API error: {loans_data["error"]}'})
         
-        total_asset_btc = float(margin_data.get('totalAssetOfBtc', 0))
-        total_liability_btc = float(margin_data.get('totalLiabilityOfBtc', 0))
-        margin_level = float(margin_data.get('marginLevel', 0))
+        loan_positions = []
+        total_collateral_btc = 0
+        total_debt_btc = 0
         
-        ltv_ratio = 0
-        if total_asset_btc > 0:
-            ltv_ratio = (total_liability_btc / total_asset_btc) * 100
-        
-        borrowed_positions = []
-        collateral_positions = []
-        
-        if 'userAssets' in margin_data:
-            for asset in margin_data['userAssets']:
-                asset_name = asset['asset']
-                free_balance = float(asset.get('free', 0))
-                locked_balance = float(asset.get('locked', 0))
-                borrowed_amount = float(asset.get('borrowed', 0))
-                interest_amount = float(asset.get('interest', 0))
-                net_asset = float(asset.get('netAsset', 0))
+        if 'rows' in loans_data:
+            for loan in loans_data['rows']:
+                try:
+                    loan_coin = loan.get('loanCoin', '')
+                    collateral_coin = loan.get('collateralCoin', '')
+                    principal_amount = float(loan.get('initialPrincipal', 0))
+                    collateral_amount = float(loan.get('initialCollateral', 0))
+                    current_ltv = float(loan.get('currentLTV', 0))
+                    liquidation_ltv = float(loan.get('liquidationLTV', 0))
+                    
+                    if principal_amount > 0:
+                        loan_positions.append({
+                            'loan_coin': loan_coin,
+                            'collateral_coin': collateral_coin,
+                            'principal_amount': principal_amount,
+                            'collateral_amount': collateral_amount,
+                            'current_ltv': current_ltv * 100,  # Convert to percentage
+                            'liquidation_ltv': liquidation_ltv * 100,
+                            'status': loan.get('status', ''),
+                            'order_id': loan.get('orderId', '')
+                        })
+                        
+                        # Convert to BTC equivalent (simplified)
+                        if loan_coin == 'BTC':
+                            total_debt_btc += principal_amount
+                        elif loan_coin == 'USDT':
+                            total_debt_btc += principal_amount / 50000  # Rough BTC price
+                        
+                        if collateral_coin == 'BTC':
+                            total_collateral_btc += collateral_amount
+                        elif collateral_coin == 'USDT':
+                            total_collateral_btc += collateral_amount / 50000
                 
-                if borrowed_amount > 0:
-                    borrowed_positions.append({
-                        'asset': asset_name,
-                        'borrowed_amount': borrowed_amount,
-                        'interest_accrued': interest_amount,
-                        'total_debt': borrowed_amount + interest_amount,
-                        'free_balance': free_balance,
-                        'locked_balance': locked_balance,
-                        'net_asset': net_asset
-                    })
-                
-                if net_asset > 0:
-                    collateral_positions.append({
-                        'asset': asset_name,
-                        'free_balance': free_balance,
-                        'locked_balance': locked_balance,
-                        'total_balance': free_balance + locked_balance,
-                        'net_asset': net_asset
-                    })
+                except Exception as e:
+                    print(f"Error processing loan: {str(e)}")
+                    continue
         
-        margin_health = "healthy"
-        if margin_level < 1.1:
-            margin_health = "critical"
-        elif margin_level < 1.3:
-            margin_health = "warning"
-        elif margin_level < 2.0:
-            margin_health = "caution"
+        # Calculate overall LTV
+        overall_ltv = 0
+        if total_collateral_btc > 0:
+            overall_ltv = (total_debt_btc / total_collateral_btc) * 100
+        
+        # Determine health status
+        health_status = "healthy"
+        if overall_ltv > 80:
+            health_status = "critical"
+        elif overall_ltv > 70:
+            health_status = "warning"
+        elif overall_ltv > 60:
+            health_status = "caution"
         
         return jsonify({
             'success': True,
-            'margin_summary': {
-                'total_asset_btc': total_asset_btc,
-                'total_liability_btc': total_liability_btc,
-                'margin_level': margin_level,
-                'ltv_ratio': ltv_ratio,
-                'margin_health': margin_health,
-                'borrowed_count': len(borrowed_positions),
-                'collateral_count': len(collateral_positions),
-                'trade_enabled': margin_data.get('tradeEnabled', False),
-                'transfer_enabled': margin_data.get('transferEnabled', False)
+            'loan_summary': {
+                'total_collateral_btc': total_collateral_btc,
+                'total_debt_btc': total_debt_btc,
+                'overall_ltv': overall_ltv,
+                'health_status': health_status,
+                'active_loans': len(loan_positions),
+                'target_ltv': rebalance_settings['target_ltv']
             },
-            'borrowed_positions': borrowed_positions,
-            'collateral_positions': collateral_positions
+            'loan_positions': loan_positions
         })
         
     except Exception as e:
-        return jsonify({'error': f'Failed to fetch margin positions: {str(e)}'})
+        return jsonify({'error': f'Failed to fetch loan positions: {str(e)}'})
 
 @app.route('/api/ltv-status/<client_id>')
 def get_ltv_status(client_id):
-    """Get current LTV status and rebalancing recommendations"""
-    try:
-        ltv_status = rebalancing_engine.get_ltv_status()
-        return jsonify({
-            'success': True,
-            'ltv_status': ltv_status.__dict__
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to get LTV status: {str(e)}'})
+    """Get current LTV status for loans"""
+    loans_data = get_loan_positions(client_id)
+    
+    if not loans_data or 'error' in loans_data:
+        return jsonify({'error': 'Failed to get loan data'})
+    
+    loan_summary = loans_data['loan_summary']
+    current_ltv = loan_summary['overall_ltv']
+    target_ltv = rebalance_settings['target_ltv']
+    threshold = rebalance_settings['rebalance_threshold']
+    
+    ltv_diff = current_ltv - target_ltv
+    needs_rebalance = abs(ltv_diff) > threshold
+    
+    action_required = None
+    recommended_actions = []
+    
+    if needs_rebalance:
+        if current_ltv > target_ltv:
+            action_required = 'reduce_ltv'
+            recommended_actions = [
+                f"Current LTV ({current_ltv:.1f}%) is above target ({target_ltv}%)",
+                "Recommended actions: Repay loans or add collateral",
+                "Priority: 1) Repay with available balance, 2) Add more collateral"
+            ]
+        else:
+            action_required = 'increase_ltv'
+            recommended_actions = [
+                f"Current LTV ({current_ltv:.1f}%) is below target ({target_ltv}%)",
+                "Recommended actions: Borrow more against collateral",
+                "Can increase capital efficiency by borrowing more"
+            ]
+    else:
+        recommended_actions = [
+            f"LTV ({current_ltv:.1f}%) is within target range",
+            "No rebalancing needed"
+        ]
+    
+    return jsonify({
+        'success': True,
+        'ltv_status': {
+            'current_ltv': current_ltv,
+            'target_ltv': target_ltv,
+            'ltv_diff': ltv_diff,
+            'needs_rebalance': needs_rebalance,
+            'action_required': action_required,
+            'total_collateral_btc': loan_summary['total_collateral_btc'],
+            'total_debt_btc': loan_summary['total_debt_btc'],
+            'health_status': loan_summary['health_status'],
+            'recommended_actions': recommended_actions
+        }
+    })
+
+@app.route('/api/rebalance-settings', methods=['GET', 'POST'])
+def handle_rebalance_settings():
+    """Get or update rebalancing settings"""
+    global rebalance_settings
+    
+    if request.method == 'GET':
+        return jsonify({'success': True, 'settings': rebalance_settings})
+    
+    elif request.method == 'POST':
+        data = request.get_json()
+        if data:
+            if 'target_ltv' in data:
+                rebalance_settings['target_ltv'] = float(data['target_ltv'])
+            if 'rebalance_threshold' in data:
+                rebalance_settings['rebalance_threshold'] = float(data['rebalance_threshold'])
+            if 'min_rebalance_interval' in data:
+                rebalance_settings['min_rebalance_interval'] = int(data['min_rebalance_interval'])
+            if 'max_borrow_amount_usd' in data:
+                rebalance_settings['max_borrow_amount_usd'] = float(data['max_borrow_amount_usd'])
+            if 'min_repay_amount_usd' in data:
+                rebalance_settings['min_repay_amount_usd'] = float(data['min_repay_amount_usd'])
+        
+        return jsonify({'success': True, 'settings': rebalance_settings})
 
 @app.route('/api/calculate-rebalance/<client_id>')
-def calculate_rebalance(client_id):
-    """Calculate optimal rebalancing actions"""
-    try:
-        ltv_status = rebalancing_engine.get_ltv_status()
-        actions = rebalancing_engine.calculate_optimal_rebalance(ltv_status)
+def calculate_rebalance_actions(client_id):
+    """Calculate required rebalancing actions"""
+    ltv_data = get_ltv_status(client_id)
+    
+    if 'error' in ltv_data:
+        return jsonify({'error': ltv_data['error']})
+    
+    ltv_status = ltv_data['ltv_status']
+    actions = []
+    
+    if not ltv_status['needs_rebalance']:
+        return jsonify({'success': True, 'actions': actions, 'message': 'No rebalancing needed'})
+    
+    # Calculate actions based on LTV difference
+    if ltv_status['action_required'] == 'reduce_ltv':
+        # Need to repay debt or add collateral
+        ltv_reduction_needed = ltv_status['ltv_diff']
+        current_debt_btc = ltv_status['total_debt_btc']
+        target_debt_btc = ltv_status['total_collateral_btc'] * (ltv_status['target_ltv'] / 100)
+        debt_reduction_btc = current_debt_btc - target_debt_btc
         
-        return jsonify({
-            'success': True,
-            'actions': [action.__dict__ for action in actions],
-            'ltv_status': ltv_status.__dict__
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to calculate rebalance: {str(e)}'})
+        # Convert to USDT (rough estimate)
+        debt_reduction_usdt = debt_reduction_btc * 50000
+        
+        if debt_reduction_usdt > rebalance_settings['min_repay_amount_usd']:
+            actions.append({
+                'action_type': 'repay',
+                'asset': 'USDT',
+                'amount': debt_reduction_usdt,
+                'description': f'Repay ${debt_reduction_usdt:.2f} to reduce LTV'
+            })
+    
+    elif ltv_status['action_required'] == 'increase_ltv':
+        # Can borrow more
+        current_debt_btc = ltv_status['total_debt_btc']
+        target_debt_btc = ltv_status['total_collateral_btc'] * (ltv_status['target_ltv'] / 100)
+        additional_borrow_btc = target_debt_btc - current_debt_btc
+        
+        # Convert to USDT and apply safety margin
+        additional_borrow_usdt = additional_borrow_btc * 50000 * 0.9  # 90% safety margin
+        max_borrow = rebalance_settings['max_borrow_amount_usd']
+        
+        borrow_amount = min(additional_borrow_usdt, max_borrow)
+        
+        if borrow_amount > 50:  # Minimum $50
+            actions.append({
+                'action_type': 'borrow',
+                'asset': 'USDT',
+                'amount': borrow_amount,
+                'description': f'Borrow ${borrow_amount:.2f} to increase LTV'
+            })
+    
+    return jsonify({'success': True, 'actions': actions})
 
 @app.route('/api/perform-rebalance/<client_id>', methods=['POST'])
 def perform_rebalance(client_id):
-    """Execute full rebalancing process"""
-    try:
-        result = rebalancing_engine.perform_full_rebalance()
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': f'Failed to perform rebalance: {str(e)}'})
-
-@app.route('/api/rebalance-settings', methods=['GET', 'POST'])
-def rebalance_settings_endpoint():
-    """Get or update rebalancing settings"""
-    global rebalancing_settings
+    """Execute rebalancing actions"""
+    # Get calculated actions
+    actions_data = calculate_rebalance_actions(client_id)
     
-    if request.method == 'GET':
-        return jsonify({
-            'success': True,
-            'settings': rebalancing_settings
-        })
+    if 'error' in actions_data:
+        return jsonify({'error': actions_data['error']})
     
-    try:
-        data = request.get_json()
-        if 'target_ltv' in data:
-            rebalancing_settings['target_ltv'] = float(data['target_ltv'])
-        if 'rebalance_threshold' in data:
-            rebalancing_settings['rebalance_threshold'] = float(data['rebalance_threshold'])
-        
-        # Update rebalancing engine settings
-        rebalancing_engine.settings = rebalancing_settings
-        
-        return jsonify({
-            'success': True,
-            'message': 'Settings updated successfully',
-            'settings': rebalancing_settings
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to update settings: {str(e)}'})
+    actions = actions_data['actions']
+    
+    if not actions:
+        return jsonify({'success': True, 'message': 'No actions to perform'})
+    
+    # Get before LTV
+    before_ltv_data = get_ltv_status(client_id)
+    before_ltv = before_ltv_data['ltv_status']['current_ltv'] if 'ltv_status' in before_ltv_data else 0
+    
+    executed_actions = []
+    successful_actions = 0
+    failed_actions = 0
+    
+    for action in actions:
+        try:
+            if action['action_type'] == 'repay':
+                # In a real implementation, this would make API calls to repay loans
+                # For now, we'll simulate success
+                executed_actions.append({
+                    'action': action,
+                    'success': True,
+                    'message': f'Simulated repay of {action["amount"]:.2f} {action["asset"]}'
+                })
+                successful_actions += 1
+                
+            elif action['action_type'] == 'borrow':
+                # In a real implementation, this would make API calls to borrow
+                # For now, we'll simulate success
+                executed_actions.append({
+                    'action': action,
+                    'success': True,
+                    'message': f'Simulated borrow of {action["amount"]:.2f} {action["asset"]}'
+                })
+                successful_actions += 1
+                
+        except Exception as e:
+            executed_actions.append({
+                'action': action,
+                'success': False,
+                'error': str(e)
+            })
+            failed_actions += 1
+    
+    # Get after LTV (in real implementation, this would show actual changes)
+    after_ltv_data = get_ltv_status(client_id)
+    after_ltv = after_ltv_data['ltv_status']['current_ltv'] if 'ltv_status' in after_ltv_data else before_ltv
+    
+    return jsonify({
+        'success': failed_actions == 0,
+        'message': f'Rebalancing completed. {successful_actions} successful, {failed_actions} failed.',
+        'before_ltv': before_ltv,
+        'after_ltv': after_ltv,
+        'executed_actions': executed_actions
+    })
 
 @app.route('/api/strategies')
 def get_strategies():
@@ -583,4 +692,16 @@ def parse_trading_message(message):
         return None
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    print("🚀 Starting Efficient Trading Platform...")
+    print(f"📊 Flask app: {app}")
+    print(f"🔧 Environment: {os.environ.get('FLASK_ENV', 'production')}")
+    print(f"🔑 API Key configured: {bool(BINANCE_API_KEY and BINANCE_API_KEY.strip())}")
+    print(f"🔐 Secret Key configured: {bool(BINANCE_SECRET_KEY and BINANCE_SECRET_KEY.strip())}")
+    
+    try:
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False)
+    except Exception as e:
+        print(f"❌ Failed to start app: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

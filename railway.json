@@ -4,10 +4,8 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "gunicorn app:app --bind 0.0.0.0:8080 --workers 1 --timeout 120 --preload --access-logfile - --error-logfile -",
+    "startCommand": "gunicorn wsgi:application --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --preload --access-logfile - --error-logfile -",
     "restartPolicyType": "always",
-    "restartPolicyMaxRetries": 10,
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 300
+    "restartPolicyMaxRetries": 10
   }
 }

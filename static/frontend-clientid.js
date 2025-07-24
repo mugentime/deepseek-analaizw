@@ -27,7 +27,7 @@ async function connect() {
   const data = await api('/api/connect', 'POST');
   if (data.success) {
     activeClientId = data.client_id; // "live_client"
-    document.getElementById('status').innerHTML = '<strong style="color: #244c48;">✅ Connected (LIVE)</strong>';
+    document.getElementById('status').innerHTML = '<strong style="color: #3fb950;">✅ Connected (LIVE)</strong>';
     refreshAll();
   } else {
     alert('Failed to connect: ' + (data.error || 'Unknown error'));
@@ -53,6 +53,16 @@ const formatAmount = (amount) => {
 const formatDailyRewards = (rewards) => {
   const rewardValue = parseFloat(rewards) || 0;
   return `<span style="color: #9c4d30; font-weight: bold;">$${rewardValue.toFixed(4)}</span>`;
+};
+
+const formatLTV = (ltv) => {
+  const ltvValue = parseFloat(ltv) || 0;
+  let colorClass = '#244c48'; // healthy green
+  if (ltvValue > 80) colorClass = '#962c2f'; // critical red
+  else if (ltvValue > 70) colorClass = '#f39c12'; // warning orange
+  else if (ltvValue > 60) colorClass = '#9c4d30'; // caution amber
+  
+  return `<span style="color: ${colorClass}; font-weight: bold;">${ltvValue.toFixed(1)}%</span>`;
 };
 
 //-------------------------------------------------------------
@@ -166,161 +176,122 @@ async function refreshEarn() {
   }
 }
 
-async function refreshTracked() {
-  const tracked = await api('/api/tracked-positions');
-  if (tracked.error) return console.warn(tracked.error);
+async function refreshLoanPositions() {
+  if (!activeClientId) return;
+  const loans = await api(`/api/loans/${activeClientId}`);
+  if (loans.error) return console.warn(loans.error);
   
-  if (!tracked.tracked_positions || tracked.tracked_positions.length === 0) {
-    document.getElementById('trackedPositions').innerHTML = '<p style="color: #8b949e;">No tracked positions</p>';
-    return;
-  }
-  
-  document.getElementById('trackedPositions').innerHTML = tracked.tracked_positions.map(pos => `
-    <div style="background: #0d1117; padding: 12px; margin: 8px 0; border-radius: 6px; border: 1px solid #30363d;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <strong style="color: #f0f6fc;">${pos.symbol} ${pos.side}</strong>
-        <span style="color: #8b949e; font-size: 0.8em;">${pos.age_minutes}m ago</span>
-      </div>
-      <div style="font-size: 0.9em; color: #8b949e; margin-top: 5px;">
-        Qty: ${pos.quantity} | Entry: $${pos.entry_price.toFixed(4)} | Strategy: ${pos.strategy_id}
-      </div>
-    </div>
-  `).join('');
-}
-
-async function loadStrategies() {
-  const data = await api('/api/strategies');
-  const count = data.length;
-  document.getElementById('strategies').textContent = count;
-  
-  if (count === 0) {
-    document.getElementById('strategiesList').innerHTML = '<p style="color: #8b949e;">No strategies created yet</p>';
-    return;
-  }
-  
-  document.getElementById('strategiesList').innerHTML = data.map(s => `
-    <div style="background: #0d1117; padding: 12px; margin: 8px 0; border-radius: 6px; border: 1px solid #30363d;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <strong style="color: #f0f6fc;">${s.name}</strong>
-        <span style="color: #244c48; font-weight: bold;">${s.total_signals} signals</span>
-      </div>
-      <div style="font-size: 0.9em; color: #8b949e; margin: 5px 0;">${s.description || 'No description'}</div>
-      <div style="font-size: 0.8em; color: #8b949e;">ID: ${s.id} | Created: ${new Date(s.created_at).toLocaleDateString()}</div>
-      <button onclick="copyURL(${s.id})" style="background: #244c48; color: white; border: none; padding: 4px 8px; border-radius: 4px; margin-top: 5px; cursor: pointer;">Copy URL</button>
-    </div>
-  `).join('');
-}
-
-async function createStrategy() {
-  const name = document.getElementById('strategyName').value.trim();
-  const description = document.getElementById('strategyDesc').value.trim();
-  
-  if (!name) {
-    alert('Please enter a strategy name');
-    return;
-  }
-  
-  const data = await api('/api/strategies', 'POST', {name, description});
-  if (data.success) {
-    status(`Strategy "${name}" created with ID ${data.strategy_id}`);
-    document.getElementById('strategyName').value = '';
-    document.getElementById('strategyDesc').value = '';
-    loadStrategies();
-  } else {
-    alert('Failed to create strategy: ' + data.error);
-  }
-}
-
-async function refreshWebhooks() {
-  const data = await api('/api/webhooks/activity');
-  const count = data.length;
-  
-  // Update stats
-  document.getElementById('totalWebhooks').textContent = count;
-  document.getElementById('successTrades').textContent = data.filter(w => w.parsed_data?.action !== 'error').length;
-  document.getElementById('failedWebhooks').textContent = data.filter(w => w.parsed_data?.action === 'error').length;
-  document.getElementById('lastWebhook').textContent = count > 0 ? new Date(data[0].timestamp).toLocaleTimeString() : 'Never';
-  
-  // Live feed (last 5)
-  const recent = data.slice(0, 5);
-  document.getElementById('liveFeed').innerHTML = recent.length > 0 ? recent.map(w => `
-    <div class="feed-item">
-      <strong>${w.parsed_data.action.toUpperCase()}</strong> ${w.parsed_data.symbol} 
-      <span style="float: right; color: #8b949e;">${new Date(w.timestamp).toLocaleTimeString()}</span>
-    </div>
-  `).join('') : '<p style="color: #8b949e;">Waiting for signals...</p>';
-  
-  // Activity list (all)
-  document.getElementById('activityList').innerHTML = data.length > 0 ? data.map(w => `
-    <div style="background: #0d1117; padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #30363d;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <strong style="color: #f0f6fc;">${w.strategy_name}</strong>
-        <span style="color: #8b949e; font-size: 0.8em;">${new Date(w.timestamp).toLocaleString()}</span>
-      </div>
-      <div style="font-size: 0.9em; color: #8b949e; margin: 5px 0;">
-        <strong>${w.parsed_data.action.toUpperCase()}</strong> ${w.parsed_data.symbol} 
-        ${w.parsed_data.quantity > 0 ? `Qty: ${w.parsed_data.quantity}` : ''} 
-        ${w.parsed_data.price > 0 ? `Price: $${w.parsed_data.price.toFixed(4)}` : ''}
-      </div>
-      <div style="font-size: 0.8em; color: #8b949e; font-family: monospace;">${w.raw_message}</div>
-    </div>
-  `).join('') : '<p style="color: #8b949e;">No webhook activity yet</p>';
-}
-
-async function testParsing() {
-  const message = document.getElementById('testMessage').value.trim();
-  if (!message) {
-    alert('Please enter a test message');
-    return;
-  }
-  
-  const data = await api('/webhook/debug-parse', 'POST', null);
-  
-  // Need to send as raw text, not JSON
-  try {
-    const response = await fetch('/webhook/debug-parse', {
-      method: 'POST',
-      headers: {'Content-Type': 'text/plain'},
-      body: message
-    });
-    const result = await response.json();
+  if (loans.success && loans.loan_summary) {
+    const summary = loans.loan_summary;
+    const positions = loans.loan_positions || [];
     
-    document.getElementById('parseResult').innerHTML = `
-      <div style="background: #0d1117; padding: 10px; border-radius: 6px; margin-top: 10px;">
-        <h5 style="color: #244c48; margin-bottom: 8px;">Parse Result:</h5>
-        <pre style="color: #8b949e; font-size: 0.9em;">${JSON.stringify(result, null, 2)}</pre>
+    // Update loan summary display
+    const loanSummaryHtml = `
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 15px;">
+        <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+          <div style="font-size: 1.3em; font-weight: bold; color: #58a6ff;">${summary.active_loans}</div>
+          <div style="font-size: 0.8em; color: #8b949e;">Active Loans</div>
+        </div>
+        <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+          <div style="font-size: 1.3em; font-weight: bold; color: #9c4d30;">${summary.total_collateral_btc.toFixed(4)}</div>
+          <div style="font-size: 0.8em; color: #8b949e;">Collateral (BTC)</div>
+        </div>
+        <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+          <div style="font-size: 1.3em; font-weight: bold; color: #962c2f;">${summary.total_debt_btc.toFixed(4)}</div>
+          <div style="font-size: 0.8em; color: #8b949e;">Debt (BTC)</div>
+        </div>
+        <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+          <div style="font-size: 1.3em; font-weight: bold;">${formatLTV(summary.overall_ltv)}</div>
+          <div style="font-size: 0.8em; color: #8b949e;">Overall LTV</div>
+        </div>
       </div>
     `;
-  } catch (err) {
-    document.getElementById('parseResult').innerHTML = `<p style="color: #962c2f;">Error: ${err.message}</p>`;
+    
+    // Display individual loan positions
+    if (positions.length > 0) {
+      const positionsHtml = positions.map(loan => `
+        <div style="background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin: 8px 0;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: #f0f6fc;">${loan.loan_coin} loan (${loan.collateral_coin} collateral)</strong>
+            <span style="font-size: 0.8em; color: ${loan.current_ltv > 80 ? '#962c2f' : loan.current_ltv > 70 ? '#f39c12' : '#244c48'};">
+              ${loan.status.toUpperCase()}
+            </span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 0.9em;">
+            <span>Principal: <strong>${loan.principal_amount.toFixed(4)} ${loan.loan_coin}</strong></span>
+            <span>Collateral: <strong>${loan.collateral_amount.toFixed(4)} ${loan.collateral_coin}</strong></span>
+            <span>LTV: ${formatLTV(loan.current_ltv)}</span>
+            <span>Liquidation LTV: <strong>${loan.liquidation_ltv.toFixed(1)}%</strong></span>
+            <span>Interest Rate: <strong>${(loan.interest_rate * 100).toFixed(2)}%</strong></span>
+            <span>Order ID: <small>${loan.order_id}</small></span>
+          </div>
+        </div>
+      `).join('');
+      
+      document.getElementById('loanPositions').innerHTML = loanSummaryHtml + positionsHtml;
+    } else {
+      document.getElementById('loanPositions').innerHTML = loanSummaryHtml + '<p style="color: #8b949e;">No active loans found</p>';
+    }
+  } else {
+    document.getElementById('loanPositions').innerHTML = '<p style="color: #8b949e;">No loan data available</p>';
   }
 }
 
-async function checkConfig() {
-  const config = await api('/api/debug/config');
-  document.getElementById('configDebug').style.display = 'block';
-  document.getElementById('configDebug').innerHTML = `
-    <h5 style="color: #244c48; margin-bottom: 8px;">API Configuration:</h5>
-    <pre style="color: #8b949e; font-size: 0.8em;">${JSON.stringify(config, null, 2)}</pre>
+async function refreshLTVStatus() {
+  if (!activeClientId) return;
+  const data = await api(`/api/ltv-status/${activeClientId}`);
+  if (data.error) {
+    document.getElementById('ltvStatus').innerHTML = `<p style="color: #962c2f;">Error: ${data.error}</p>`;
+    return;
+  }
+  
+  const ltv = data.ltv_status;
+  const healthClass = getHealthClass(ltv.health_status);
+  
+  document.getElementById('ltvStatus').innerHTML = `
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 15px;">
+      <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+        <div style="font-size: 1.5em; font-weight: bold;">${formatLTV(ltv.current_ltv)}</div>
+        <div style="font-size: 0.8em; color: #8b949e;">Current LTV</div>
+      </div>
+      <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+        <div style="font-size: 1.5em; font-weight: bold; color: #58a6ff;">${ltv.target_ltv}%</div>
+        <div style="font-size: 0.8em; color: #8b949e;">Target LTV</div>
+      </div>
+      <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+        <div style="font-size: 1.5em; font-weight: bold; color: ${healthClass === 'positive' ? '#244c48' : healthClass === 'warning' ? '#9c4d30' : '#962c2f'};">
+          ${ltv.health_status.toUpperCase()}
+        </div>
+        <div style="font-size: 0.8em; color: #8b949e;">Health Status</div>
+      </div>
+      <div style="text-align: center; padding: 10px; background: #0d1117; border-radius: 6px;">
+        <div style="font-size: 1.5em; font-weight: bold; color: ${ltv.needs_rebalance ? '#9c4d30' : '#244c48'};">
+          ${ltv.needs_rebalance ? 'NEEDED' : 'OK'}
+        </div>
+        <div style="font-size: 0.8em; color: #8b949e;">Rebalance</div>
+      </div>
+    </div>
+    <div style="background: #0d1117; padding: 15px; border-radius: 6px; margin-top: 15px;">
+      <h5 style="color: #58a6ff; margin-bottom: 10px;">📋 Recommendations:</h5>
+      ${ltv.recommended_actions.map(action => `<p style="font-size: 0.9em; margin: 5px 0; color: #f0f6fc;">• ${action}</p>`).join('')}
+    </div>
   `;
 }
 
-function status(message) {
-  document.getElementById('statusBar').textContent = message;
-  setTimeout(() => {
-    document.getElementById('statusBar').textContent = 'Efficient Trading Platform - Ready';
-  }, 3000);
-}
-
-function copyURL(id) {
-  const url = `${location.origin}/webhook/tradingview/strategy/${id}`;
-  navigator.clipboard.writeText(url);
-  status(`Webhook URL copied for strategy ${id}!`);
+function getHealthClass(health) {
+  switch(health.toLowerCase()) {
+    case 'healthy': return 'positive';
+    case 'caution': return 'warning';
+    case 'warning': return 'warning';
+    case 'critical': return 'negative';
+    default: return '';
+  }
 }
 
 function refreshAll() {
   refreshBalance();
   refreshPositions();
   refreshEarn();
-  refreshTracked();
+  refreshLoanPositions();
+  refreshLTVStatus();
 }
